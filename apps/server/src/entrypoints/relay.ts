@@ -1,3 +1,4 @@
+import { loadDotEnvFile } from "./load-env-file.js";
 import { loadEnv } from "@tabula/config";
 import { createDb } from "@tabula/db";
 import {
@@ -13,6 +14,7 @@ const POLL_MS = 500;
 const BATCH = 50;
 
 async function main(): Promise<void> {
+  loadDotEnvFile();
   const env = loadEnv();
   const log = createLogger({ name: "tabula-relay", role: "relay" });
   const db = createDb(env.DATABASE_URL);

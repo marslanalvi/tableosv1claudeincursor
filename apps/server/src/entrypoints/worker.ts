@@ -1,3 +1,4 @@
+import { loadDotEnvFile } from "./load-env-file.js";
 import { loadEnv } from "@tabula/config";
 import { ALL_QUEUE_NAMES, createWorker, type QueueName } from "@tabula/jobs";
 import { createLogger } from "@tabula/observability";
@@ -18,6 +19,7 @@ import {
 import { connectRedis } from "../lib/redis.js";
 
 async function main(): Promise<void> {
+  loadDotEnvFile();
   const env = loadEnv();
   const log = createLogger({ name: "tabula-worker", role: "worker" });
 

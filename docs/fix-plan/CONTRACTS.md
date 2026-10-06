@@ -17,11 +17,11 @@ Audit reports that motivated this pass live in `docs/fix-plan/audit-*.md`.
    - a package: `npx tsc -p packages/<name>/tsconfig.json --noEmit`
    Errors in files you don't own may be another workstream mid-edit: ignore those, never "fix" them.
 4. **Running stack (already up, hot-reloading; do not start/stop servers):**
-   API `http://localhost:3100` · realtime `ws://localhost:3102` · web `http://localhost:5183` (proxies `/v1` and `/ws`) · public `http://localhost:5184`.
+   API `http://localhost:3200` · realtime `ws://localhost:3202` · web `http://localhost:5283` (proxies `/v1` and `/ws`) · public `http://localhost:5284`. Worker + relay also run. Logs: `.data/logs/<role>.log`. (Started detached via `scripts/dev-isolated.ps1`; stop with `scripts/dev-isolated-stop.ps1` — only the orchestrator restarts the stack.)
    DB: `postgres://tabula:tabula@localhost:5432/tabula_cc` (docker container `docker-postgres-1`, `docker exec docker-postgres-1 psql -U tabula -d tabula_cc`). Redis DB 1.
    Apply new migrations with: `DATABASE_URL=postgres://tabula:tabula@localhost:5432/tabula_cc npx pnpm@9.15.0 db:migrate`.
-   **Never touch the `tabula` database or ports 3000/3002/5173** — that is a different checkout.
-5. **Testing:** verify with real HTTP calls against `http://localhost:3100` (curl / node fetch with a cookie jar). Create your own test user: `POST /v1/auth/signup {email, password, name}` with an email like `ws-<letter>-<n>@tabula.test`. UI workstreams may use the browser pane **only in a tab they create** (`tabs_create`), never the existing tabs.
+   **Never touch the `tabula` database or ports 3000/3002/5173/3100/3102/5183/5184** — those belong to OTHER checkouts (`32TableOS`, `32TableOSCursor`). Never kill processes you didn't start.
+5. **Testing:** verify with real HTTP calls against `http://localhost:3200` (curl / node fetch with a cookie jar). Create your own test user: `POST /v1/auth/signup {email, password, name}` with an email like `ws-<letter>-<n>@tabula.test`. UI workstreams may use the browser pane **only in a tab they create** (`tabs_create`), never the existing tabs.
 6. **Migrations:** new files only, numbered from your reserved range (§9). Never edit an existing migration.
 7. **Line endings:** files are LF. If you script edits in Python on Windows, open with `newline=""`.
 8. **Do not commit.** The orchestrator commits per workstream after review.
@@ -229,6 +229,8 @@ Field UI (C, `packages/field-ui`): `renderCellValue(field, value)`, `<FieldValue
 Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; F replaces the placeholder with a clear "coming soon" empty state.
 
 ## Contract changes
+
+- 2026-10-06 (orchestrator): stack moved to ports 3200/3202/5283/5284 (old ports now used by another checkout). Worker/relay entrypoints now load `.env` via `entrypoints/load-env-file.ts`. Generated `*.tsbuildinfo` files are no longer tracked by git.
 (append dated notes here)
 
 ### 2026-10-06 — B: storage formats, helpers (early note; final details in B's report)
