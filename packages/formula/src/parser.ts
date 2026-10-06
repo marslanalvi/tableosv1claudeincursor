@@ -277,7 +277,7 @@ export function parseFormula(input: string): FormulaAst {
     }
     if (t.type === "rparen") throw new FormulaParseError(`Unexpected ")" at position ${t.start + 1}`);
     if (t.type === "comma") throw new FormulaParseError(`Unexpected "," at position ${t.start + 1}`);
-    throw new FormulaParseError(`Unexpected "${t.type === "op" ? t.value : t.type}" at position ${t.start + 1}`);
+    throw new FormulaParseError(`Unexpected "${t.value}" at position ${t.start + 1}`);
   };
 
   const ast = parseExpression(-1);

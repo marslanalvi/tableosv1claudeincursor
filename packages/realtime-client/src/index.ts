@@ -8,7 +8,10 @@ export type {
   RealtimeOpRejectFrame,
   RealtimePresenceEntry,
   RealtimePresenceFrame,
+  RealtimePresenceState,
+  RealtimePresenceUser,
   RealtimeResyncFrame,
+  RealtimeSubscribedEvent,
   SendOpMutation,
   WsTicketResponse,
 } from "./types.js";

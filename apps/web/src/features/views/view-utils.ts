@@ -375,3 +375,144 @@ export function dateValueFor(field: FieldDto, day: Date): string {
   }
   return ymd(day);
 }
+
+/* ------------------------------------------------------------------ */
+/* Client-side filter evaluation (record coloring in non-grid views). */
+
+function relDate(v: unknown): Date | null {
+  if (typeof v === "string") return parseDateValue(v);
+  if (!v || typeof v !== "object") return null;
+  const r = v as { relative?: string; date?: string };
+  const today = startOfDay(new Date());
+  switch (r.relative) {
+    case "today": return today;
+    case "tomorrow": return addDays(today, 1);
+    case "yesterday": return addDays(today, -1);
+    case "oneWeekAgo": return addDays(today, -7);
+    case "oneWeekFromNow": return addDays(today, 7);
+    case "oneMonthAgo": return addDays(today, -30);
+    case "oneMonthFromNow": return addDays(today, 30);
+    case "exactDate": return parseDateValue(r.date);
+    default: return null;
+  }
+}
+
+function isEmptyVal(v: unknown): boolean {
+  return v === null || v === undefined || v === "" || v === false || (Array.isArray(v) && v.length === 0);
+}
+
+function idsOf(v: unknown): string[] {
+  const arr = Array.isArray(v) ? v : isEmptyVal(v) ? [] : [v];
+  return arr.map((x) => (x && typeof x === "object" ? String((x as { id?: string }).id) : String(x)));
+}
+
+export function matchesFilter(
+  node: FilterAst | null | undefined,
+  record: { fields: Record<string, unknown> },
+  fields: FieldDto[],
+  meId?: string,
+): boolean {
+  if (!node) return true;
+  if (node.kind === "and") return node.children.every((c) => matchesFilter(c, record, fields, meId));
+  if (node.kind === "or")
+    return node.children.length === 0 || node.children.some((c) => matchesFilter(c, record, fields, meId));
+  const field = fields.find((f) => f.id === node.fieldId);
+  if (!field) return true;
+  const v = record.fields[field.id];
+  const want = node.value;
+  switch (node.op) {
+    case "empty": return isEmptyVal(v);
+    case "notEmpty": return !isEmptyVal(v);
+    case "isMe": return Boolean(meId) && idsOf(v).includes(meId!);
+    case "anyOf": case "hasAnyOf": return idsOf(v).some((x) => idsOf(want).includes(x));
+    case "hasAllOf": return idsOf(want).every((x) => idsOf(v).includes(x));
+    case "noneOf": return !idsOf(v).some((x) => idsOf(want).includes(x));
+  }
+  if (DATE_FIELD_TYPES.has(field.type)) {
+    const d = parseDateValue(v);
+    if (node.op === "isWithin") {
+      if (!d) return false;
+      const w = (want ?? {}) as { range?: string; n?: number };
+      const today = startOfDay(new Date());
+      const n = w.n ?? 7;
+      const span: Record<string, [number, number]> = {
+        pastWeek: [-7, 0], pastMonth: [-30, 0], pastYear: [-365, 0],
+        nextWeek: [0, 7], nextMonth: [0, 30], nextYear: [0, 365],
+        pastNDays: [-n, 0], nextNDays: [0, n],
+      };
+      if (w.range === "thisWeek") return dayDiff(d, addDays(today, -today.getDay())) >= 0 && dayDiff(d, addDays(today, 6 - today.getDay())) <= 0;
+      if (w.range === "thisMonth") return d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+      const s = span[w.range ?? "pastWeek"] ?? [-7, 0];
+      const diff = dayDiff(d, today);
+      return diff >= s[0] && diff <= s[1];
+    }
+    const t = relDate(want);
+    if (!d || !t) return false;
+    const diff = dayDiff(d, t);
+    switch (node.op) {
+      case "eq": return diff === 0;
+      case "neq": return diff !== 0;
+      case "isBefore": case "lt": return diff < 0;
+      case "isAfter": case "gt": return diff > 0;
+      case "isOnOrBefore": case "lte": return diff <= 0;
+      case "isOnOrAfter": case "gte": return diff >= 0;
+    }
+    return true;
+  }
+  if (typeof want === "number" || ["number", "currency", "percent", "rating", "duration"].includes(field.type)) {
+    const a = Number(v);
+    const b = Number(want);
+    if (v === undefined || v === null || Number.isNaN(a)) return node.op === "neq";
+    switch (node.op) {
+      case "eq": return a === b;
+      case "neq": return a !== b;
+      case "gt": return a > b;
+      case "gte": return a >= b;
+      case "lt": return a < b;
+      case "lte": return a <= b;
+    }
+  }
+  if (field.type === "checkbox") return (v === true) === (want !== false);
+  const text = valueToText(field, v).toLowerCase();
+  const raw = typeof v === "string" ? v : "";
+  const w = String(want ?? "").toLowerCase();
+  switch (node.op) {
+    case "eq": return raw === want || text === w;
+    case "neq": return !(raw === want || text === w);
+    case "contains": return text.includes(w);
+    case "notContains": return !text.includes(w);
+    case "startsWith": return text.startsWith(w);
+    case "endsWith": return text.endsWith(w);
+  }
+  return true;
+}
+
+/** Record color per view config (select-field color or first matching rule). */
+export function recordColor(
+  config: ViewConfig,
+  record: { fields: Record<string, unknown> },
+  fields: FieldDto[],
+): string | null {
+  const c = config.color;
+  if (c.mode === "select") {
+    const f = fields.find((x) => x.id === c.fieldId);
+    const opt = selectOptions(f).find((o) => o.id === record.fields[c.fieldId]);
+    return opt ? colorOf(opt.color).bg : null;
+  }
+  if (c.mode === "conditions") {
+    for (const rule of c.rules) {
+      const cleaned = cleanFilter(rule.filter);
+      if (cleaned && matchesFilter(cleaned, record, fields)) return colorOf(rule.color).bg;
+    }
+  }
+  return null;
+}
+
+export function randomOptionId(): string {
+  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let s = "opt_";
+  const arr = new Uint8Array(14);
+  crypto.getRandomValues(arr);
+  for (const b of arr) s += chars[b % 62];
+  return s;
+}

@@ -87,7 +87,7 @@ export function translateOp(op: unknown): Record<string, unknown> {
       out[key] = value;
     }
   }
-  if (!out.op) out.op = "unknown";
+  if (!out["op"]) out["op"] = "unknown";
   return out;
 }
 
@@ -96,9 +96,9 @@ function collectRecordIds(ops: unknown[]): string[] {
   for (const op of ops) {
     if (!op || typeof op !== "object") continue;
     const o = op as Record<string, unknown>;
-    if (typeof o.recordId === "string") ids.add(o.recordId);
-    if (Array.isArray(o.recordIds)) {
-      for (const r of o.recordIds) if (typeof r === "string") ids.add(r);
+    if (typeof o["recordId"] === "string") ids.add(o["recordId"]);
+    if (Array.isArray(o["recordIds"])) {
+      for (const r of o["recordIds"]) if (typeof r === "string") ids.add(r);
     }
     for (const key of ["aRecordId", "bRecordId", "fromRecordId", "toRecordId"]) {
       if (typeof o[key] === "string") ids.add(o[key] as string);
@@ -112,7 +112,7 @@ function collectOpTableIds(ops: unknown[]): string[] {
   for (const op of ops) {
     if (!op || typeof op !== "object") continue;
     const o = op as Record<string, unknown>;
-    if (typeof o.tableId === "string") ids.add(o.tableId);
+    if (typeof o["tableId"] === "string") ids.add(o["tableId"]);
   }
   return [...ids];
 }

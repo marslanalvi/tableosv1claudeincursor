@@ -171,7 +171,7 @@ export function SearchableList({
             onMouseEnter={() => setActive(idx)}
             onClick={() => pick(idx)}
           >
-            <span style={{ width: 14, flex: "none", color: "#0d9488" }}>{item.selected ? "✓" : ""}</span>
+            <span style={{ width: 14, flex: "none", color: "#181d26" }}>{item.selected ? "✓" : ""}</span>
             {item.label}
           </button>
         ))}

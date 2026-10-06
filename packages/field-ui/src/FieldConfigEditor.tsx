@@ -406,7 +406,7 @@ function FormulaEditor({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => insertField(f)}
             >
-              <span style={{ width: 18, textAlign: "center", color: "#64748b" }}>{fieldTypeIcon(f.type)}</span>
+              <span style={{ width: 18, textAlign: "center", color: "#41454d" }}>{fieldTypeIcon(f.type)}</span>
               {f.name}
             </button>
           ))}

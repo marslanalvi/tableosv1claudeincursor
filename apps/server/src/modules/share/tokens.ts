@@ -15,8 +15,13 @@ export function createShareToken(): ShareTokenParts {
 }
 
 export function parseShareToken(raw: string): { prefix: string; token: string } | null {
-  const token = decodeURIComponent(raw);
-  if (!token.startsWith("shr_")) return null;
+  let token: string;
+  try {
+    token = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (token.length > 200 || !token.startsWith("shr_")) return null;
   const dot = token.indexOf(".", 4);
   if (dot < 0) return null;
   const prefix = token.slice(4, dot);

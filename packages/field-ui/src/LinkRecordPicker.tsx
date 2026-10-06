@@ -122,7 +122,7 @@ export function LinkRecordPicker({
                 key={r.id}
                 type="button"
                 className={`tfu-rec ${sel ? "sel" : ""}`}
-                style={idx === active ? { borderColor: "#2d7ff9" } : undefined}
+                style={idx === active ? { borderColor: "#458fff" } : undefined}
                 onMouseEnter={() => setActive(idx)}
                 onClick={() => onPick(r)}
               >

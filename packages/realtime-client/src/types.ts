@@ -12,56 +12,70 @@ export type RealtimeEventMap = {
   op_ack: RealtimeOpAckFrame;
   op_reject: RealtimeOpRejectFrame;
   resync: RealtimeResyncFrame;
+  subscribed: RealtimeSubscribedEvent;
   connected: { connId: string };
   disconnected: { code: number; reason: string };
 };
 
+/** Client-facing change hint. All ids are public ids. */
 export interface RealtimeChangeFrame {
   type: "change";
   baseId: string;
   seq: number;
-  tableId?: string;
   kind?: string;
-  ops: Array<{
-    op: string;
-    recordId: string;
-    fieldId: string;
-    value?: WireCellValue;
-  }>;
+  tableIds?: string[];
+  tableId?: string;
+  /** Tables whose record data changed. */
+  recordTableIds?: string[];
+  recordIds?: string[];
+  /** Record data changed (if `recordTableIds` is empty: unknown tables). */
+  recordsChanged?: boolean;
+  schemaChanged?: boolean;
+  clientMutationId?: string | null;
+  ops: Array<Record<string, unknown> & { op: string }>;
+  actor: { type: "user" | "system"; id: string | null };
+}
+
+export interface RealtimePresenceState {
+  tableId?: string | null;
+  viewId?: string | null;
+  recordId?: string | null;
+  cell?: { recordId: string; fieldId: string } | null;
+  [key: string]: unknown;
 }
 
 export interface RealtimePresenceUser {
   id: string;
   name: string;
-  avatarUrl?: string;
+  email?: string;
 }
 
 export interface RealtimePresenceEntry {
   connId: string;
   user: RealtimePresenceUser;
-  viewId?: string;
-  color?: string;
+  color: string;
+  state: RealtimePresenceState;
+  updatedAt: string;
 }
 
+/** Full presence snapshot of a base (always the complete list). */
 export interface RealtimePresenceFrame {
   type: "presence";
   baseId: string;
-  full?: boolean;
-  upsert?: RealtimePresenceEntry[];
-  remove?: string[];
+  full: true;
+  peers: RealtimePresenceEntry[];
 }
 
 export interface RealtimeOpAckFrame {
   type: "op_ack";
-  baseId: string;
   clientMutationId: string;
   seq: number;
-  recordVersions?: Record<string, number>;
+  version: number;
+  recordId?: string;
 }
 
 export interface RealtimeOpRejectFrame {
   type: "op_reject";
-  baseId: string;
   clientMutationId: string;
   code: string;
   detail?: string;
@@ -69,9 +83,16 @@ export interface RealtimeOpRejectFrame {
 
 export interface RealtimeResyncFrame {
   type: "resync_required";
-  baseId: string;
+  baseId?: string;
   reason: string;
   headSeq?: number;
+}
+
+export interface RealtimeSubscribedEvent {
+  baseId: string;
+  seq: number;
+  /** True when this subscription resumed after a reconnect (catch-up applied). */
+  resumed: boolean;
 }
 
 export interface CellMutation {

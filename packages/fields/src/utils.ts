@@ -4,6 +4,8 @@ import { decodePublicId, encodePublicId, generateUuidV7, type PublicIdPrefix } f
 export class FieldValidationError extends Error {
   readonly code = "FIELD_VALIDATION_FAILED";
   readonly status = 422;
+  /** Lets generic HTTP error mappers render this as a 422. */
+  readonly statusCode = 422;
   constructor(
     message: string,
     readonly field?: string,

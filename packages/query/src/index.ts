@@ -3,11 +3,17 @@ export {
   encodeRecordCursor,
   decodeRecordCursor,
   decodeLegacyCursor,
-  type RecordCursor,
+  hashString,
+  InvalidCursorError,
 } from "./cursor.js";
-export { planRecordQuery, type PlanQueryContext } from "./planner.js";
 export {
-  buildRecordQuerySql,
+  MANUAL_ORDER_FIELD,
+  RECORD_COLUMNS,
+  resolveSortKeys,
+  planRecordQuery,
+  cursorPredicate,
+  buildRecordPageSql,
+  buildRecordCountSql,
   nextCursorFromRow,
-  type RecordQuerySql,
-} from "./build-record-query.js";
+  type RecordQuerySqlOptions,
+} from "./record-query.js";

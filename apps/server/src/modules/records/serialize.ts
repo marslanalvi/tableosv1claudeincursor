@@ -99,16 +99,19 @@ export function isEmptyWireValue(v: unknown): boolean {
 export function unwrapComputed(raw: unknown): { value: unknown; error?: string } {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const o = raw as Record<string, unknown>;
-    if ("status" in o || ("value" in o && Object.keys(o).every((k) => k === "value" || k === "error" || k === "status"))) {
+    if ("status" in o) {
       if (o["status"] === "error") {
         const msg = typeof o["error"] === "string" ? o["error"] : "Error";
-        return { value: undefined, error: msg.startsWith("#") ? msg : `#ERROR ${msg}` };
+        return { value: undefined, error: msg.startsWith("#") ? msg : `#ERROR! ${msg}` };
       }
       return { value: o["value"] };
     }
   }
   return { value: raw };
 }
+
+/** Strict numeric parse shared with the SQL compiler (no hex / Infinity / NaN). */
+const NUMERIC_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d{1,2})?$/;
 
 function toIso(v: Date | string | null | undefined): string | undefined {
   if (v === null || v === undefined) return undefined;
@@ -119,7 +122,7 @@ function toIso(v: Date | string | null | undefined): string | undefined {
 
 function toNumber(v: unknown): number | undefined {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
-  if (typeof v === "string" && v.trim() !== "") {
+  if (typeof v === "string" && NUMERIC_RE.test(v.trim())) {
     const n = Number(v.trim());
     return Number.isFinite(n) ? n : undefined;
   }
@@ -448,6 +451,7 @@ export async function serializeRecords(
     const computed = (row.computed ?? {}) as Record<string, unknown>;
     const wireFields: Record<string, unknown> = {};
     const errors: Record<string, string> = {};
+    const storedErrors = (computed["_errors"] ?? {}) as Record<string, unknown>;
     for (const f of fields) {
       const key = String(f.slot);
       const fid = pid("fld", f.id);
@@ -498,6 +502,8 @@ export async function serializeRecords(
         default: {
           if (f.is_computed) {
             const u = unwrapComputed(computed[key]);
+            const se = storedErrors[key];
+            if (typeof se === "string" && se !== "") u.error = se;
             if (u.error) {
               errors[fid] = u.error;
               value = undefined;
@@ -575,7 +581,7 @@ function normalizeStored(f: SerializeFieldRow, v: unknown): unknown {
       return v === true || v === "true" || v === 1 ? true : undefined;
     case "date": {
       if (typeof v !== "string") return undefined;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
       const d = new Date(v);
       return Number.isNaN(d.getTime()) ? v : d.toISOString().slice(0, 10);
     }

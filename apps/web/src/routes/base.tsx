@@ -79,15 +79,14 @@ export function BasePage({ baseId }: { baseId: string }) {
     mutationFn: (args: {
       type: ViewKind;
       visibility: "personal" | "collaborative";
+      name?: string;
     }) => {
       if (!resolvedTableId) throw new Error("No table");
       const label =
         args.type.charAt(0).toUpperCase() + args.type.slice(1).replace("_", " ");
       return api.createView(baseId, resolvedTableId, {
-        name: `${label} view`,
-        type: args.type === "timeline" || args.type === "gantt" || args.type === "list"
-          ? "grid"
-          : args.type,
+        name: args.name?.trim() || label,
+        type: args.type,
         visibility: args.visibility,
       });
     },
@@ -242,8 +241,8 @@ export function BasePage({ baseId }: { baseId: string }) {
                     views={views}
                     activeViewId={activeView?.id ?? null}
                     onSelectView={setActiveViewId}
-                    onCreateView={(type, visibility) =>
-                      createViewMutation.mutate({ type, visibility })
+                    onCreateView={(type, visibility, name) =>
+                      createViewMutation.mutate({ type, visibility, ...(name ? { name } : {}) })
                     }
                     onToggleFavorite={(view) => favoriteMutation.mutate(view)}
                     onJumpToOriginal={(view) => setActiveViewId(view.id)}

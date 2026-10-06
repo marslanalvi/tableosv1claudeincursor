@@ -1,371 +1,825 @@
-import { useState } from "react";
-import type { FieldDto } from "../../lib/api.ts";
-import type { FilterAst } from "../../lib/api.ts";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import type { FieldDto, FilterAst, TableDto, ViewDto } from "../../lib/api.ts";
+import type { RowHeight, SortSpec, ViewConfig } from "../../lib/api-areas/views.ts";
+import { FilterGroupEditor } from "./FilterBuilder.tsx";
+import { Popover } from "./Popover.tsx";
+import { VIEW_CREATE_OPTIONS, type ViewKind } from "./view-types.ts";
+import {
+  COLOR_NAMES,
+  colorOf,
+  countConditions,
+  orderedFields,
+  toRootGroup,
+  type FilterGroup,
+} from "./view-utils.ts";
 import styles from "./views.module.css";
 
-export interface ViewToolbarProps {
-  viewName: string;
-  fields: FieldDto[];
-  hiddenFieldIds: string[];
-  onHiddenFieldsChange: (ids: string[]) => void;
-  filterConditions: Array<{
-    fieldId: string;
-    op: string;
-    value: string;
-  }>;
-  onFilterChange: (
-    conditions: Array<{ fieldId: string; op: string; value: string }>,
-  ) => void;
-  groupFieldId: string;
-  onGroupChange: (fieldId: string) => void;
-  sortFieldId: string;
-  sortDirection: "asc" | "desc";
-  onSortChange: (fieldId: string, direction: "asc" | "desc") => void;
-  colorFieldId: string;
-  onColorChange: (fieldId: string) => void;
-  rowHeight: "short" | "medium" | "tall" | "extra";
-  onRowHeightChange: (height: "short" | "medium" | "tall" | "extra") => void;
-  searchQuery: string;
-  onSearchChange: (q: string) => void;
-  onShare: () => void;
-}
-
-export function buildFilterAst(
-  conditions: Array<{ fieldId: string; op: string; value: string }>,
-): FilterAst | undefined {
-  const children = conditions
-    .filter((c) => c.fieldId)
-    .map(
-      (c): FilterAst => ({
-        kind: "condition",
-        fieldId: c.fieldId,
-        op: c.op,
-        value: c.value || undefined,
-      }),
-    );
-  if (children.length === 0) return undefined;
-  return { kind: "and", children };
-}
-
-type Panel =
-  | null
+type PanelId =
   | "hide"
   | "filter"
   | "group"
   | "sort"
   | "color"
   | "height"
-  | "search";
+  | "settings"
+  | "search"
+  | null;
 
-export function ViewToolbar({
-  viewName,
-  fields,
-  hiddenFieldIds,
-  onHiddenFieldsChange,
-  filterConditions,
-  onFilterChange,
-  groupFieldId,
-  onGroupChange,
-  sortFieldId,
-  sortDirection,
-  onSortChange,
-  colorFieldId,
-  onColorChange,
-  rowHeight,
-  onRowHeightChange,
-  searchQuery,
-  onSearchChange,
-  onShare,
-}: ViewToolbarProps) {
-  const [panel, setPanel] = useState<Panel>(null);
-  const activeFilters = filterConditions.filter((c) => c.fieldId).length;
-  const hiddenCount = hiddenFieldIds.length;
+const ROW_HEIGHTS: { id: RowHeight; label: string }[] = [
+  { id: "short", label: "Short" },
+  { id: "medium", label: "Medium" },
+  { id: "tall", label: "Tall" },
+  { id: "extra", label: "Extra tall" },
+];
 
-  function togglePanel(next: Panel) {
-    setPanel((p) => (p === next ? null : next));
-  }
+/* ------------------------------------------------------------------ */
+/* Drag-to-reorder list helper (HTML5 DnD) */
 
+function useDragList<T>(items: T[], onReorder: (next: T[]) => void) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const handlers = (i: number) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setDragIndex(i);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", String(i));
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (dragIndex === null) return;
+      e.preventDefault();
+      setOverIndex(i);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (dragIndex === null || dragIndex === i) return;
+      const next = [...items];
+      const [moved] = next.splice(dragIndex, 1);
+      next.splice(i, 0, moved!);
+      onReorder(next);
+      setDragIndex(null);
+      setOverIndex(null);
+    },
+    onDragEnd: () => {
+      setDragIndex(null);
+      setOverIndex(null);
+    },
+    "data-drag-over": overIndex === i && dragIndex !== i ? "true" : undefined,
+  });
+  return handlers;
+}
+
+/* ------------------------------------------------------------------ */
+
+function ToolbarButton({
+  id,
+  open,
+  setOpen,
+  label,
+  activeLabel,
+  active,
+  tone,
+  icon,
+  children,
+  width,
+  align,
+}: {
+  id: Exclude<PanelId, null>;
+  open: PanelId;
+  setOpen: (p: PanelId) => void;
+  label: string;
+  activeLabel?: string;
+  active?: boolean;
+  tone?: "blue" | "green" | "purple" | "orange" | "pink" | "gray";
+  icon: string;
+  children: ReactNode;
+  width?: number;
+  align?: "left" | "right";
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const isOpen = open === id;
   return (
-    <div className={styles.toolbarShell}>
-      <div className={styles.toolbar}>
-        <div className={styles.viewTitle}>
-          <span className={styles.viewTitleIcon}>▦</span>
-          <strong>{viewName}</strong>
-        </div>
+    <span className={styles.toolWrap}>
+      <button
+        ref={ref}
+        type="button"
+        className={`${styles.toolBtn} ${active ? styles[`tone_${tone ?? "gray"}`] : ""} ${isOpen ? styles.toolBtnOpen : ""}`}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        data-panel={id}
+        onClick={() => setOpen(isOpen ? null : id)}
+      >
+        <span aria-hidden className={styles.toolIcon}>
+          {icon}
+        </span>
+        <span className={styles.toolLabel}>{active && activeLabel ? activeLabel : label}</span>
+      </button>
+      <Popover
+        open={isOpen}
+        onClose={() => setOpen(null)}
+        anchorRef={ref}
+        label={label}
+        {...(width ? { width } : {})}
+        {...(align ? { align } : {})}
+      >
+        {children}
+      </Popover>
+    </span>
+  );
+}
 
-        <div className={styles.pillRow}>
-          <button
-            type="button"
-            className={
-              hiddenCount > 0
-                ? `${styles.pill} ${styles.pillActiveBlue}`
-                : styles.pill
-            }
-            onClick={() => togglePanel("hide")}
-          >
-            {hiddenCount > 0 ? `${hiddenCount} hidden fields` : "Hide fields"}
-          </button>
-          <button
-            type="button"
-            className={
-              activeFilters > 0
-                ? `${styles.pill} ${styles.pillActiveGreen}`
-                : styles.pill
-            }
-            onClick={() => togglePanel("filter")}
-          >
-            {activeFilters > 0 ? "Filtered" : "Filter"}
-          </button>
-          <button
-            type="button"
-            className={groupFieldId ? `${styles.pill} ${styles.pillActive}` : styles.pill}
-            onClick={() => togglePanel("group")}
-          >
-            Group
-          </button>
-          <button
-            type="button"
-            className={sortFieldId ? `${styles.pill} ${styles.pillActive}` : styles.pill}
-            onClick={() => togglePanel("sort")}
-          >
-            Sort
-          </button>
-          <button
-            type="button"
-            className={colorFieldId ? `${styles.pill} ${styles.pillActive}` : styles.pill}
-            onClick={() => togglePanel("color")}
-          >
-            Color
-          </button>
-          <button
-            type="button"
-            className={styles.pill}
-            onClick={() => togglePanel("height")}
-            title="Row height"
-          >
-            Row height
-          </button>
-          <button type="button" className={styles.pill} onClick={onShare}>
-            Share and sync
-          </button>
-          <button
-            type="button"
-            className={styles.iconPill}
-            aria-label="Search table"
-            onClick={() => togglePanel("search")}
-          >
-            ⌕
-          </button>
-        </div>
-      </div>
+function FieldSelect({
+  fields,
+  value,
+  onChange,
+  placeholder = "Choose a field",
+  allowNone,
+  disabled,
+  label,
+}: {
+  fields: FieldDto[];
+  value: string | null | undefined;
+  onChange: (id: string | null) => void;
+  placeholder?: string;
+  allowNone?: boolean;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <select
+      className={styles.select}
+      value={value ?? ""}
+      disabled={disabled}
+      aria-label={label ?? placeholder}
+      onChange={(e) => onChange(e.target.value || null)}
+    >
+      {allowNone || !value ? <option value="">{allowNone ? "None" : placeholder}</option> : null}
+      {fields.map((f) => (
+        <option key={f.id} value={f.id}>
+          {f.name}
+        </option>
+      ))}
+    </select>
+  );
+}
 
-      {panel === "hide" ? (
-        <div className={styles.panel}>
-          {fields.map((f) => {
-            const hidden = hiddenFieldIds.includes(f.id);
-            return (
-              <label key={f.id} className={styles.checkRow}>
-                <input
-                  type="checkbox"
-                  checked={!hidden}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      onHiddenFieldsChange(
-                        hiddenFieldIds.filter((id) => id !== f.id),
-                      );
-                    } else {
-                      onHiddenFieldsChange([...hiddenFieldIds, f.id]);
-                    }
-                  }}
-                />
-                {f.name}
-              </label>
-            );
-          })}
-        </div>
-      ) : null}
+/* ------------------------------------------------------------------ */
+/* Panels */
 
-      {panel === "filter" ? (
-        <div className={styles.panel}>
-          {filterConditions.map((cond, index) => (
-            <div key={index} className={styles.filterRow}>
-              <select
-                value={cond.fieldId}
-                onChange={(e) => {
-                  const next = [...filterConditions];
-                  next[index] = { ...cond, fieldId: e.target.value };
-                  onFilterChange(next);
-                }}
-              >
-                <option value="">Field…</option>
-                {fields.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={cond.op}
-                onChange={(e) => {
-                  const next = [...filterConditions];
-                  next[index] = { ...cond, op: e.target.value };
-                  onFilterChange(next);
-                }}
-              >
-                <option value="contains">contains</option>
-                <option value="eq">equals</option>
-                <option value="empty">empty</option>
-                <option value="notEmpty">not empty</option>
-              </select>
-              <input
-                type="text"
-                placeholder="Value"
-                value={cond.value}
-                onChange={(e) => {
-                  const next = [...filterConditions];
-                  next[index] = { ...cond, value: e.target.value };
-                  onFilterChange(next);
-                }}
-              />
+function HideFieldsPanel({
+  table,
+  config,
+  update,
+  disabled,
+  title = "Hide fields",
+}: {
+  table: TableDto;
+  config: ViewConfig;
+  update: (p: Partial<ViewConfig>) => void;
+  disabled: boolean;
+  title?: string;
+}) {
+  const [q, setQ] = useState("");
+  const all = orderedFields(table, config);
+  const primary = all.find((f) => f.id === table.primaryFieldId);
+  const others = all.filter((f) => f.id !== table.primaryFieldId);
+  const hidden = new Set(config.hiddenFieldIds);
+  const shown = others.filter((f) => f.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const drag = useDragList(others, (next) =>
+    update({ fieldOrder: [...(primary ? [primary.id] : []), ...next.map((f) => f.id)] }),
+  );
+  return (
+    <div className={styles.panelBody}>
+      <div className={styles.panelTitle}>{title}</div>
+      <input
+        className={styles.input}
+        placeholder="Find a field"
+        aria-label="Find a field"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <div className={styles.fieldList}>
+        {primary ? (
+          <div className={styles.fieldRow} title="The primary field can't be hidden">
+            <span className={styles.dragHandle} aria-hidden />
+            <span className={styles.toggleLocked} aria-hidden />
+            <span className={styles.fieldName}>{primary.name}</span>
+          </div>
+        ) : null}
+        {shown.map((f) => {
+          const i = others.indexOf(f);
+          const on = !hidden.has(f.id);
+          return (
+            <div key={f.id} className={styles.fieldRow} {...(disabled || q ? {} : drag(i))}>
+              <span className={styles.dragHandle} aria-hidden>
+                ⋮⋮
+              </span>
               <button
                 type="button"
-                className={styles.removeCondition}
-                aria-label={`Remove condition ${index + 1}`}
-                title="Remove condition"
-                onClick={() => {
-                  const next = filterConditions.filter((_, i) => i !== index);
-                  onFilterChange(
-                    next.length > 0
-                      ? next
-                      : [{ fieldId: "", op: "contains", value: "" }],
-                  );
-                }}
+                role="switch"
+                aria-checked={on}
+                aria-label={`Show ${f.name}`}
+                disabled={disabled}
+                className={on ? styles.toggleOn : styles.toggleOff}
+                onClick={() =>
+                  update({
+                    hiddenFieldIds: on
+                      ? [...config.hiddenFieldIds, f.id]
+                      : config.hiddenFieldIds.filter((x) => x !== f.id),
+                  })
+                }
+              />
+              <span className={styles.fieldName}>{f.name}</span>
+            </div>
+          );
+        })}
+      </div>
+      {!disabled ? (
+        <div className={styles.panelActionsSplit}>
+          <button
+            type="button"
+            className={styles.secondaryBtn}
+            onClick={() => update({ hiddenFieldIds: others.map((f) => f.id) })}
+          >
+            Hide all
+          </button>
+          <button type="button" className={styles.secondaryBtn} onClick={() => update({ hiddenFieldIds: [] })}>
+            Show all
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SortListPanel({
+  title,
+  fields,
+  items,
+  onChange,
+  disabled,
+  max,
+  emptyText,
+  addLabel,
+}: {
+  title: string;
+  fields: FieldDto[];
+  items: SortSpec[];
+  onChange: (next: SortSpec[]) => void;
+  disabled: boolean;
+  max: number;
+  emptyText: string;
+  addLabel: string;
+}) {
+  const drag = useDragList(items, onChange);
+  const used = new Set(items.map((s) => s.fieldId));
+  const firstFree = fields.find((f) => !used.has(f.id));
+  return (
+    <div className={styles.panelBody}>
+      <div className={styles.panelTitle}>{title}</div>
+      {items.length === 0 ? <p className={styles.muted}>{emptyText}</p> : null}
+      {items.map((s, i) => {
+        const field = fields.find((f) => f.id === s.fieldId);
+        const isText = !field || !["number", "currency", "percent", "rating", "duration", "date", "datetime", "checkbox", "autonumber", "count"].includes(field.type);
+        return (
+          <div key={`${s.fieldId}-${i}`} className={styles.sortRow} {...(disabled ? {} : drag(i))}>
+            <span className={styles.dragHandle} aria-hidden>
+              ⋮⋮
+            </span>
+            <FieldSelect
+              fields={fields.filter((f) => f.id === s.fieldId || !used.has(f.id))}
+              value={s.fieldId}
+              disabled={disabled}
+              label="Sort field"
+              onChange={(id) => {
+                if (!id) return;
+                const next = [...items];
+                next[i] = { ...s, fieldId: id };
+                onChange(next);
+              }}
+            />
+            <select
+              className={styles.select}
+              value={s.direction}
+              disabled={disabled}
+              aria-label="Direction"
+              onChange={(e) => {
+                const next = [...items];
+                next[i] = { ...s, direction: e.target.value as "asc" | "desc" };
+                onChange(next);
+              }}
+            >
+              <option value="asc">{isText ? "A → Z" : "1 → 9"}</option>
+              <option value="desc">{isText ? "Z → A" : "9 → 1"}</option>
+            </select>
+            {!disabled ? (
+              <button
+                type="button"
+                className={styles.iconBtn}
+                aria-label="Remove"
+                onClick={() => onChange(items.filter((_, j) => j !== i))}
               >
                 ✕
               </button>
-            </div>
-          ))}
+            ) : null}
+          </div>
+        );
+      })}
+      {!disabled && items.length < max && firstFree ? (
+        <div className={styles.panelActions}>
           <button
             type="button"
-            className={styles.panelAction}
-            onClick={() =>
-              onFilterChange([
-                ...filterConditions,
-                { fieldId: "", op: "contains", value: "" },
-              ])
-            }
+            className={styles.linkBtn}
+            onClick={() => onChange([...items, { fieldId: firstFree.id, direction: "asc" }])}
           >
-            + Add condition
+            + {addLabel}
           </button>
-          {activeFilters > 0 ? (
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ColorPanel({
+  baseId,
+  fields,
+  config,
+  update,
+  disabled,
+}: {
+  baseId: string;
+  fields: FieldDto[];
+  config: ViewConfig;
+  update: (p: Partial<ViewConfig>) => void;
+  disabled: boolean;
+}) {
+  const selectFields = fields.filter((f) => f.type === "single_select");
+  const color = config.color;
+  return (
+    <div className={styles.panelBody}>
+      <div className={styles.panelTitle}>Color records</div>
+      <div className={styles.segmented} role="radiogroup" aria-label="Color mode">
+        {(
+          [
+            ["none", "None"],
+            ["select", "Select field"],
+            ["conditions", "Conditions"],
+          ] as const
+        ).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={color.mode === mode}
+            disabled={disabled || (mode === "select" && selectFields.length === 0)}
+            className={color.mode === mode ? styles.segOn : styles.seg}
+            onClick={() => {
+              if (mode === "none") update({ color: { mode: "none" } });
+              else if (mode === "select")
+                update({ color: { mode: "select", fieldId: selectFields[0]!.id } });
+              else update({ color: { mode: "conditions", rules: color.mode === "conditions" ? color.rules : [] } });
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {color.mode === "select" ? (
+        <label className={styles.formRow}>
+          <span>Color by</span>
+          <FieldSelect
+            fields={selectFields}
+            value={color.fieldId}
+            disabled={disabled}
+            onChange={(id) => id && update({ color: { mode: "select", fieldId: id } })}
+          />
+        </label>
+      ) : null}
+      {color.mode === "conditions" ? (
+        <div className={styles.colorRules}>
+          {color.rules.map((rule, i) => (
+            <div key={i} className={styles.colorRule}>
+              <div className={styles.colorRuleHead}>
+                <span className={styles.swatches}>
+                  {COLOR_NAMES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      aria-label={c}
+                      disabled={disabled}
+                      className={rule.color === c ? styles.swatchOn : styles.swatch}
+                      style={{ background: colorOf(c).bg }}
+                      onClick={() => {
+                        const rules = [...color.rules];
+                        rules[i] = { ...rule, color: c };
+                        update({ color: { mode: "conditions", rules } });
+                      }}
+                    />
+                  ))}
+                </span>
+                {!disabled ? (
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    aria-label="Remove color rule"
+                    onClick={() =>
+                      update({ color: { mode: "conditions", rules: color.rules.filter((_, j) => j !== i) } })
+                    }
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+              <FilterGroupEditor
+                baseId={baseId}
+                fields={fields}
+                group={toRootGroup(rule.filter)}
+                disabled={disabled}
+                onChange={(g) => {
+                  const rules = [...color.rules];
+                  rules[i] = { ...rule, filter: g as FilterAst };
+                  update({ color: { mode: "conditions", rules } });
+                }}
+              />
+            </div>
+          ))}
+          {!disabled ? (
             <button
               type="button"
-              className={styles.panelAction}
+              className={styles.linkBtn}
               onClick={() =>
-                onFilterChange([{ fieldId: "", op: "contains", value: "" }])
+                update({
+                  color: {
+                    mode: "conditions",
+                    rules: [
+                      ...color.rules,
+                      { color: COLOR_NAMES[color.rules.length % COLOR_NAMES.length]!, filter: { kind: "and", children: [] } },
+                    ],
+                  },
+                })
               }
             >
-              Clear filters
+              + Add color condition
             </button>
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
 
-      {panel === "group" ? (
-        <div className={styles.panel}>
-          <select
-            value={groupFieldId}
-            onChange={(e) => onGroupChange(e.target.value)}
-          >
-            <option value="">No grouping</option>
-            {fields.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      ) : null}
-
-      {panel === "sort" ? (
-        <div className={styles.panel}>
-          <div className={styles.filterRow}>
-            <select
-              value={sortFieldId}
-              onChange={(e) => onSortChange(e.target.value, sortDirection)}
-            >
-              <option value="">Default order</option>
-              {fields.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={sortDirection}
-              onChange={(e) =>
-                onSortChange(sortFieldId, e.target.value as "asc" | "desc")
-              }
-            >
-              <option value="asc">A → Z</option>
-              <option value="desc">Z → A</option>
-            </select>
-          </div>
-        </div>
-      ) : null}
-
-      {panel === "color" ? (
-        <div className={styles.panel}>
-          <select
-            value={colorFieldId}
-            onChange={(e) => onColorChange(e.target.value)}
-          >
-            <option value="">No color</option>
-            {fields
-              .filter((f) => f.type === "single_select" || f.type === "status")
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            {fields.every(
-              (f) => f.type !== "single_select" && f.type !== "status",
-            )
-              ? fields.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))
-              : null}
-          </select>
-        </div>
-      ) : null}
-
-      {panel === "height" ? (
-        <div className={styles.panel}>
-          {(["short", "medium", "tall", "extra"] as const).map((h) => (
-            <label key={h} className={styles.checkRow}>
-              <input
-                type="radio"
-                name="rowHeight"
-                checked={rowHeight === h}
-                onChange={() => onRowHeightChange(h)}
-              />
-              {h}
-            </label>
-          ))}
-        </div>
-      ) : null}
-
-      {panel === "search" ? (
-        <div className={styles.panel}>
-          <input
-            autoFocus
-            className={styles.searchInput}
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search this table…"
+function ViewSettingsPanel({
+  kind,
+  fields,
+  config,
+  update,
+  disabled,
+}: {
+  kind: ViewKind;
+  fields: FieldDto[];
+  config: ViewConfig;
+  update: (p: Partial<ViewConfig>) => void;
+  disabled: boolean;
+}) {
+  const byType = (...types: string[]) => fields.filter((f) => types.includes(f.type));
+  if (kind === "kanban") {
+    const k = config.kanban ?? { stackFieldId: null };
+    return (
+      <div className={styles.panelBody}>
+        <div className={styles.panelTitle}>Kanban settings</div>
+        <label className={styles.formRow}>
+          <span>Stack by</span>
+          <FieldSelect
+            fields={byType("single_select", "collaborator")}
+            value={k.stackFieldId}
+            disabled={disabled}
+            onChange={(id) => update({ kanban: { ...k, stackFieldId: id } })}
           />
+        </label>
+        <label className={styles.formRow}>
+          <span>Card cover</span>
+          <FieldSelect
+            fields={byType("attachment")}
+            value={k.coverFieldId ?? null}
+            allowNone
+            disabled={disabled}
+            onChange={(id) => update({ kanban: { ...k, coverFieldId: id } })}
+          />
+        </label>
+        <label className={styles.checkLabel}>
+          <input
+            type="checkbox"
+            disabled={disabled}
+            checked={Boolean(k.hideEmptyStacks)}
+            onChange={(e) => update({ kanban: { ...k, hideEmptyStacks: e.target.checked } })}
+          />
+          Hide empty stacks
+        </label>
+      </div>
+    );
+  }
+  if (kind === "calendar") {
+    const c = config.calendar ?? { dateFieldId: null };
+    const dates = byType("date", "datetime", "created_time", "modified_time");
+    return (
+      <div className={styles.panelBody}>
+        <div className={styles.panelTitle}>Calendar settings</div>
+        <label className={styles.formRow}>
+          <span>Date field</span>
+          <FieldSelect fields={dates} value={c.dateFieldId} disabled={disabled} onChange={(id) => update({ calendar: { ...c, dateFieldId: id } })} />
+        </label>
+        <label className={styles.formRow}>
+          <span>End date (optional)</span>
+          <FieldSelect fields={dates.filter((f) => f.id !== c.dateFieldId)} value={c.endDateFieldId ?? null} allowNone disabled={disabled} onChange={(id) => update({ calendar: { ...c, endDateFieldId: id } })} />
+        </label>
+      </div>
+    );
+  }
+  if (kind === "gallery") {
+    const g = config.gallery ?? {};
+    return (
+      <div className={styles.panelBody}>
+        <div className={styles.panelTitle}>Gallery settings</div>
+        <label className={styles.formRow}>
+          <span>Cover field</span>
+          <FieldSelect fields={byType("attachment")} value={g.coverFieldId ?? null} allowNone disabled={disabled} onChange={(id) => update({ gallery: { ...g, coverFieldId: id } })} />
+        </label>
+        <label className={styles.formRow}>
+          <span>Cover fit</span>
+          <select className={styles.select} disabled={disabled} value={g.coverFit ?? "cover"} onChange={(e) => update({ gallery: { ...g, coverFit: e.target.value as "cover" | "contain" } })}>
+            <option value="cover">Crop</option>
+            <option value="contain">Fit</option>
+          </select>
+        </label>
+      </div>
+    );
+  }
+  if (kind === "timeline" || kind === "gantt") {
+    const t = config.timeline ?? { startFieldId: null };
+    const dates = byType("date", "datetime");
+    return (
+      <div className={styles.panelBody}>
+        <div className={styles.panelTitle}>Timeline settings</div>
+        <label className={styles.formRow}>
+          <span>Start date</span>
+          <FieldSelect fields={dates} value={t.startFieldId} disabled={disabled} onChange={(id) => update({ timeline: { ...t, startFieldId: id } })} />
+        </label>
+        <label className={styles.formRow}>
+          <span>End date</span>
+          <FieldSelect fields={dates.filter((f) => f.id !== t.startFieldId)} value={t.endFieldId ?? null} allowNone disabled={disabled} onChange={(id) => update({ timeline: { ...t, endFieldId: id } })} />
+        </label>
+      </div>
+    );
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+
+export function ViewToolbar({
+  baseId,
+  table,
+  view,
+  kind,
+  config,
+  update,
+  canEdit,
+  search,
+  onSearchChange,
+  onShare,
+  recordCount,
+  saveError,
+}: {
+  baseId: string;
+  table: TableDto;
+  view: ViewDto | undefined;
+  kind: ViewKind;
+  config: ViewConfig;
+  update: (patch: Partial<ViewConfig>) => void;
+  canEdit: boolean;
+  search: string;
+  onSearchChange: (q: string) => void;
+  onShare?: () => void;
+  recordCount?: number;
+  saveError?: string | null;
+}) {
+  const [open, setOpen] = useState<PanelId>(null);
+  const fields = useMemo(() => orderedFields(table, config), [table, config]);
+  const disabled = !canEdit;
+  const filterCount = countConditions(config.filter);
+  const hiddenCount = config.hiddenFieldIds.filter((id) => table.fields.some((f) => f.id === id)).length;
+  const meta = VIEW_CREATE_OPTIONS.find((o) => o.id === kind);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  const showHide = kind !== "form" && kind !== "calendar";
+  const showGroup = kind === "grid" || kind === "list" || kind === "timeline" || kind === "gantt";
+  const showColor = kind !== "form";
+  const showHeight = kind === "grid";
+  const showSettings = kind === "kanban" || kind === "calendar" || kind === "gallery" || kind === "timeline" || kind === "gantt";
+  const showRecordControls = kind !== "form";
+
+  return (
+    <div className={styles.toolbarShell}>
+      <div className={styles.toolbar} role="toolbar" aria-label="View toolbar">
+        <div className={styles.viewTitle}>
+          <span className={styles.viewTitleIcon} style={{ color: meta?.color }} aria-hidden>
+            {meta?.icon ?? "▦"}
+          </span>
+          <span className={styles.viewName}>{view?.name ?? "Grid view"}</span>
+          {view?.visibility === "locked" ? (
+            <span className={styles.lockBadge} title="Locked view">
+              🔒 Locked
+            </span>
+          ) : null}
+          {view?.visibility === "personal" ? <span className={styles.metaBadge}>Personal</span> : null}
+        </div>
+
+        {showRecordControls ? (
+          <div className={styles.toolRow}>
+            {showHide ? (
+              <ToolbarButton
+                id="hide"
+                open={open}
+                setOpen={setOpen}
+                icon="◐"
+                label={kind === "grid" ? "Hide fields" : "Customize cards"}
+                activeLabel={`${hiddenCount} hidden field${hiddenCount === 1 ? "" : "s"}`}
+                active={hiddenCount > 0}
+                tone="blue"
+                width={320}
+              >
+                <HideFieldsPanel table={table} config={config} update={update} disabled={disabled} title={kind === "grid" ? "Hide fields" : "Fields shown on cards"} />
+              </ToolbarButton>
+            ) : null}
+            <ToolbarButton
+              id="filter"
+              open={open}
+              setOpen={setOpen}
+              icon="⚲"
+              label="Filter"
+              activeLabel={`Filtered by ${filterCount} condition${filterCount === 1 ? "" : "s"}`}
+              active={filterCount > 0}
+              tone="green"
+              width={640}
+            >
+              <div className={styles.panelBody}>
+                <div className={styles.panelTitle}>In this view, show records</div>
+                <FilterGroupEditor
+                  baseId={baseId}
+                  fields={fields}
+                  group={toRootGroup(config.filter)}
+                  disabled={disabled}
+                  onChange={(g: FilterGroup) =>
+                    update({ filter: g.children.length ? (g as FilterAst) : null })
+                  }
+                />
+              </div>
+            </ToolbarButton>
+            {showGroup ? (
+              <ToolbarButton
+                id="group"
+                open={open}
+                setOpen={setOpen}
+                icon="☰"
+                label="Group"
+                activeLabel={`Grouped by ${config.groups.length} field${config.groups.length === 1 ? "" : "s"}`}
+                active={config.groups.length > 0}
+                tone="purple"
+                width={420}
+              >
+                <SortListPanel
+                  title="Group by"
+                  fields={fields}
+                  items={config.groups}
+                  onChange={(groups) => update({ groups })}
+                  disabled={disabled}
+                  max={3}
+                  emptyText="No groups applied. Group records by up to 3 fields."
+                  addLabel="Add subgroup"
+                />
+              </ToolbarButton>
+            ) : null}
+            <ToolbarButton
+              id="sort"
+              open={open}
+              setOpen={setOpen}
+              icon="⇅"
+              label="Sort"
+              activeLabel={`Sorted by ${config.sorts.length} field${config.sorts.length === 1 ? "" : "s"}`}
+              active={config.sorts.length > 0}
+              tone="orange"
+              width={420}
+            >
+              <SortListPanel
+                title="Sort by"
+                fields={fields}
+                items={config.sorts}
+                onChange={(sorts) => update({ sorts })}
+                disabled={disabled}
+                max={10}
+                emptyText="No sorts applied. Records use their manual order."
+                addLabel="Add another sort"
+              />
+            </ToolbarButton>
+            {showColor ? (
+              <ToolbarButton
+                id="color"
+                open={open}
+                setOpen={setOpen}
+                icon="◍"
+                label="Color"
+                activeLabel={config.color.mode === "select" ? "Colored by field" : "Colored by conditions"}
+                active={config.color.mode !== "none"}
+                tone="pink"
+                width={560}
+              >
+                <ColorPanel baseId={baseId} fields={fields} config={config} update={update} disabled={disabled} />
+              </ToolbarButton>
+            ) : null}
+            {showHeight ? (
+              <ToolbarButton id="height" open={open} setOpen={setOpen} icon="↕" label="Row height" width={200}>
+                <div className={styles.panelBody}>
+                  <div className={styles.panelTitle}>Row height</div>
+                  {ROW_HEIGHTS.map((h) => (
+                    <button
+                      key={h.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={config.rowHeight === h.id}
+                      disabled={disabled}
+                      className={config.rowHeight === h.id ? styles.menuItemOn : styles.menuItem}
+                      onClick={() => update({ rowHeight: h.id })}
+                    >
+                      {h.label}
+                    </button>
+                  ))}
+                </div>
+              </ToolbarButton>
+            ) : null}
+            {showSettings ? (
+              <ToolbarButton id="settings" open={open} setOpen={setOpen} icon="⚙" label="Settings" width={340}>
+                <ViewSettingsPanel kind={kind} fields={fields} config={config} update={update} disabled={disabled} />
+              </ToolbarButton>
+            ) : null}
+          </div>
+        ) : (
+          <div className={styles.toolRow} />
+        )}
+
+        <div className={styles.toolRight}>
+          {saveError ? <span className={styles.errorText}>Not saved: {saveError}</span> : null}
+          {typeof recordCount === "number" && showRecordControls ? (
+            <span className={styles.muted}>
+              {recordCount} record{recordCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          {showRecordControls ? (
+            <span className={styles.searchWrap}>
+              {open === "search" || search ? (
+                <input
+                  ref={searchRef}
+                  autoFocus
+                  className={styles.searchInput}
+                  placeholder="Find in view"
+                  aria-label="Search records"
+                  value={search}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      onSearchChange("");
+                      setOpen(null);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (!search) setOpen(null);
+                  }}
+                />
+              ) : null}
+              <button
+                type="button"
+                className={styles.toolBtn}
+                aria-label={search ? "Clear search" : "Search"}
+                onClick={() => {
+                  if (search) {
+                    onSearchChange("");
+                    setOpen(null);
+                  } else setOpen(open === "search" ? null : "search");
+                }}
+              >
+                {search ? "✕" : "⌕"}
+              </button>
+            </span>
+          ) : null}
+          {onShare ? (
+            <button type="button" className={styles.toolBtn} onClick={onShare}>
+              Share view
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {!canEdit ? (
+        <div className={styles.readOnlyBar}>
+          This view is {view?.visibility === "locked" ? "locked" : "read-only"} — its filters, sorts and layout can't be changed.
         </div>
       ) : null}
     </div>

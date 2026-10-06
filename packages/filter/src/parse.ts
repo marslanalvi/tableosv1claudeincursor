@@ -1,21 +1,21 @@
-import type { FilterAst, FilterNode } from "./ast.js";
+import { FILTER_OPS, type FilterAst, type FilterNode } from "./ast.js";
 
 const MAX_GROUP_DEPTH = 8;
 
 function groupDepth(node: FilterNode, depth = 0): number {
   if (node.kind === "condition") return depth;
-  const childDepth = Math.max(
-    ...node.children.map((c) => groupDepth(c, depth + 1)),
-    depth,
-  );
-  return childDepth;
+  return Math.max(...node.children.map((c) => groupDepth(c, depth + 1)), depth);
 }
 
 function isFilterNode(value: unknown): value is FilterNode {
   if (!value || typeof value !== "object") return false;
   const o = value as Record<string, unknown>;
   if (o["kind"] === "condition") {
-    return typeof o["fieldId"] === "string" && typeof o["op"] === "string";
+    return (
+      typeof o["fieldId"] === "string" &&
+      typeof o["op"] === "string" &&
+      (FILTER_OPS as readonly string[]).includes(o["op"])
+    );
   }
   if (o["kind"] === "and" || o["kind"] === "or") {
     return Array.isArray(o["children"]) && o["children"].every(isFilterNode);

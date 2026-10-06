@@ -412,7 +412,7 @@ export async function registerAuthRoutes(
       });
       const expiresAt = new Date(Date.now() + 30_000).toISOString();
       const url =
-        process.env.REALTIME_PUBLIC_URL ??
+        process.env["REALTIME_PUBLIC_URL"] ??
         `ws://127.0.0.1:${ctx.env.REALTIME_PORT}/v1/ws`;
       void reply.send({ ticket, expiresAt, url });
     } catch (err) {

@@ -2,7 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../../lib/app-context.js";
 import { pid } from "../../lib/public-ids.js";
-import { handleRouteError, notFound } from "../../http/errors.js";
+import { forbidden, handleRouteError, notFound, unauthorized } from "../../http/errors.js";
+import { getOrgRole } from "../access/workspace-access.js";
+import { writeAuditEvent } from "../audit/write.js";
+
+/** Only org owners and billing admins may change the plan. */
+const BILLING_ROLES = new Set(["owner", "billing_admin"]);
 import { LimitsService } from "./limits-service.js";
 import { resolveBillingOrgId } from "./resolve-org.js";
 import { upgradeOrgToTeamPlan } from "./subscription.js";
@@ -24,7 +29,7 @@ export async function registerBillingRoutes(
       try {
         const user = request.user;
         if (!user) {
-          notFound(request, reply);
+          unauthorized(request, reply);
           return;
         }
 
@@ -75,7 +80,7 @@ export async function registerBillingRoutes(
     try {
       const user = request.user;
       if (!user) {
-        notFound(request, reply);
+        unauthorized(request, reply);
         return;
       }
 
@@ -90,7 +95,21 @@ export async function registerBillingRoutes(
         return;
       }
 
+      const role = await getOrgRole(ctx.db, user.id, orgId);
+      if (!role || !BILLING_ROLES.has(role)) {
+        forbidden(request, reply, "Only organization owners and billing admins can change the plan");
+        return;
+      }
       await upgradeOrgToTeamPlan(ctx.db, orgId);
+      await writeAuditEvent(ctx.db, {
+        orgId,
+        actorUserId: user.id,
+        action: "billing.plan_upgraded",
+        targetType: "organization",
+        targetId: orgId,
+        metadata: { plan: "team" },
+        ip: request.ip,
+      });
       void reply.send({ plan: "team" as const });
     } catch (err) {
       handleRouteError(request, reply, err);
@@ -102,7 +121,7 @@ export async function registerBillingRoutes(
     try {
       const user = request.user;
       if (!user) {
-        notFound(request, reply);
+        unauthorized(request, reply);
         return;
       }
 
@@ -119,7 +138,21 @@ export async function registerBillingRoutes(
         return;
       }
 
+      const role = await getOrgRole(ctx.db, user.id, orgId);
+      if (!role || !BILLING_ROLES.has(role)) {
+        forbidden(request, reply, "Only organization owners and billing admins can change the plan");
+        return;
+      }
       await upgradeOrgToTeamPlan(ctx.db, orgId);
+      await writeAuditEvent(ctx.db, {
+        orgId,
+        actorUserId: user.id,
+        action: "billing.plan_upgraded",
+        targetType: "organization",
+        targetId: orgId,
+        metadata: { plan: "team" },
+        ip: request.ip,
+      });
       void reply.send({ mode: "in_app" as const, plan: "team" as const });
     } catch (err) {
       handleRouteError(request, reply, err);

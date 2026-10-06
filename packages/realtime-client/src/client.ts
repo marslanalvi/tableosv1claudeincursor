@@ -6,6 +6,7 @@ import type {
   RealtimeOpAckFrame,
   RealtimeOpRejectFrame,
   RealtimePresenceFrame,
+  RealtimePresenceState,
   RealtimeResyncFrame,
   SendOpMutation,
 } from "./types.js";
@@ -15,6 +16,8 @@ export interface RealtimeClientOptions {
   /** Override ticket fetch (testing). */
   getTicket?: () => Promise<{ ticket: string; url: string }>;
   maxBackoffMs?: number;
+  /** Presence heartbeat interval (server drops entries after ~90s). */
+  presenceHeartbeatMs?: number;
 }
 
 type Frame =
@@ -25,24 +28,41 @@ type Frame =
   | RealtimeResyncFrame
   | { type: string; [key: string]: unknown };
 
+/**
+ * One WebSocket per client instance, subscribed to at most one base.
+ *
+ * - Subscribes exactly once per socket (on `hello`), resuming from the last
+ *   seen seq after a reconnect so the server can replay missed changes or
+ *   answer `resync_required`.
+ * - Reconnects with exponential backoff + jitter; `disconnect()` cancels any
+ *   in-flight connect so no orphan sockets are left behind.
+ * - Detects seq gaps in the live stream and emits `resync`.
+ */
 export class RealtimeClient {
   private readonly apiBase: string;
   private readonly getTicket: () => Promise<{ ticket: string; url: string }>;
   private readonly maxBackoffMs: number;
+  private readonly presenceHeartbeatMs: number;
   private socket: WebSocket | null = null;
   private listeners: {
     [K in keyof RealtimeEventMap]?: Set<RealtimeListener<K>>;
   } = {};
   private subscribedBaseId: string | null = null;
+  /** Last seq applied for `subscribedBaseId` (0 = unknown / fresh). */
   private afterSeq = 0;
   private reconnectAttempt = 0;
-  private closedByUser = false;
+  private closedByUser = true;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private ridCounter = 0;
+  private presenceTimer: ReturnType<typeof setInterval> | null = null;
+  private presenceState: RealtimePresenceState | null = null;
+  /** Bumped on every connect/disconnect; stale async opens bail out. */
+  private generation = 0;
+  private ready = false;
 
   constructor(options: RealtimeClientOptions = {}) {
     this.apiBase = options.apiBase ?? "";
     this.maxBackoffMs = options.maxBackoffMs ?? 30_000;
+    this.presenceHeartbeatMs = options.presenceHeartbeatMs ?? 30_000;
     this.getTicket =
       options.getTicket ??
       (async () => {
@@ -65,6 +85,10 @@ export class RealtimeClient {
     };
   }
 
+  get isConnected(): boolean {
+    return this.ready;
+  }
+
   getAfterSeq(): number {
     return this.afterSeq;
   }
@@ -73,29 +97,51 @@ export class RealtimeClient {
     this.afterSeq = seq;
   }
 
+  /** Open the socket (idempotent while already connected/connecting). */
   async connect(): Promise<void> {
+    if (!this.closedByUser) return;
     this.closedByUser = false;
-    await this.openSocket();
+    this.generation += 1;
+    await this.openSocket(this.generation);
   }
 
   disconnect(): void {
     this.closedByUser = true;
+    this.generation += 1;
+    this.ready = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.socket?.close(1000, "client disconnect");
+    this.stopPresenceHeartbeat();
+    const socket = this.socket;
     this.socket = null;
+    if (socket && socket.readyState <= WebSocket.OPEN) {
+      socket.close(1000, "client disconnect");
+    }
   }
 
+  /**
+   * Select the base to follow. Sends `subscribe` now if the socket is ready;
+   * otherwise it is sent once on `hello`. Never sends twice per socket.
+   */
   subscribeBase(baseId: string, sinceSeq?: number): void {
-    this.subscribedBaseId = baseId;
-    if (sinceSeq !== undefined) this.afterSeq = sinceSeq;
-    this.send({
-      type: "subscribe",
-      baseId,
-      afterSeq: this.afterSeq,
-    });
+    if (this.subscribedBaseId !== baseId) {
+      if (this.subscribedBaseId && this.ready) {
+        this.send({ type: "unsubscribe", baseId: this.subscribedBaseId });
+      }
+      this.subscribedBaseId = baseId;
+      this.afterSeq = sinceSeq ?? 0;
+      if (this.ready) this.sendSubscribe();
+    } else if (sinceSeq !== undefined) {
+      this.afterSeq = sinceSeq;
+    }
+  }
+
+  /** Publish what this client is looking at; re-sent on reconnect. */
+  setPresence(state: RealtimePresenceState): void {
+    this.presenceState = state;
+    this.sendPresence();
   }
 
   sendOp(baseId: string, _schemaVersion: number, mutations: SendOpMutation[]): void {
@@ -114,6 +160,38 @@ export class RealtimeClient {
     }
   }
 
+  private sendSubscribe(): void {
+    if (!this.subscribedBaseId) return;
+    this.send({
+      type: "subscribe",
+      baseId: this.subscribedBaseId,
+      ...(this.afterSeq > 0 ? { afterSeq: this.afterSeq } : {}),
+    });
+  }
+
+  private sendPresence(): void {
+    if (!this.ready || !this.subscribedBaseId || !this.presenceState) return;
+    this.send({
+      type: "presence",
+      baseId: this.subscribedBaseId,
+      state: this.presenceState,
+    });
+  }
+
+  private startPresenceHeartbeat(): void {
+    this.stopPresenceHeartbeat();
+    this.presenceTimer = setInterval(() => {
+      this.sendPresence();
+    }, this.presenceHeartbeatMs);
+  }
+
+  private stopPresenceHeartbeat(): void {
+    if (this.presenceTimer) {
+      clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
+    }
+  }
+
   private emit<K extends keyof RealtimeEventMap>(
     event: K,
     payload: RealtimeEventMap[K],
@@ -121,13 +199,12 @@ export class RealtimeClient {
     const set = this.listeners[event];
     if (!set) return;
     for (const fn of set) {
-      fn(payload);
+      try {
+        fn(payload);
+      } catch (err) {
+        console.error("[realtime] listener failed", err);
+      }
     }
-  }
-
-  private nextRid(): string {
-    this.ridCounter += 1;
-    return `r${this.ridCounter}`;
   }
 
   private send(payload: Record<string, unknown>): void {
@@ -135,48 +212,60 @@ export class RealtimeClient {
     this.socket.send(JSON.stringify(payload));
   }
 
-  private scheduleReconnect(): void {
-    if (this.closedByUser) return;
-    const delay = Math.min(
-      1000 * 2 ** this.reconnectAttempt,
-      this.maxBackoffMs,
-    );
+  private scheduleReconnect(generation: number): void {
+    if (this.closedByUser || generation !== this.generation) return;
+    if (this.reconnectTimer) return;
+    const base = Math.min(1000 * 2 ** this.reconnectAttempt, this.maxBackoffMs);
+    const delay = Math.round(base * (0.75 + Math.random() * 0.5));
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.openSocket();
+      if (generation !== this.generation || this.closedByUser) return;
+      void this.openSocket(generation);
     }, delay);
   }
 
-  private async openSocket(): Promise<void> {
+  private async openSocket(generation: number): Promise<void> {
+    let ticket: string;
+    let url: string;
     try {
-      const { ticket, url } = await this.getTicket();
+      ({ ticket, url } = await this.getTicket());
+    } catch {
+      this.scheduleReconnect(generation);
+      return;
+    }
+    // disconnect() (or a newer connect) happened while fetching the ticket.
+    if (generation !== this.generation || this.closedByUser) return;
+
+    let socket: WebSocket;
+    try {
       const wsUrl = resolveWsUrl(url, globalThis.location);
       const sep = wsUrl.includes("?") ? "&" : "?";
       const fullUrl = `${wsUrl}${sep}ticket=${encodeURIComponent(ticket)}`;
-      const socket = new WebSocket(fullUrl, "tabula.v1");
-      this.socket = socket;
-
-      socket.addEventListener("open", () => {
-        this.reconnectAttempt = 0;
-      });
-
-      socket.addEventListener("message", (ev) => {
-        this.handleMessage(String(ev.data));
-      });
-
-      socket.addEventListener("close", (ev) => {
-        this.emit("disconnected", { code: ev.code, reason: ev.reason });
-        this.socket = null;
-        if (!this.closedByUser) this.scheduleReconnect();
-      });
-
-      socket.addEventListener("error", () => {
-        /* close handler runs reconnect */
-      });
+      socket = new WebSocket(fullUrl, "tabula.v1");
     } catch {
-      this.scheduleReconnect();
+      this.scheduleReconnect(generation);
+      return;
     }
+    this.socket = socket;
+
+    socket.addEventListener("message", (ev) => {
+      if (this.socket !== socket) return;
+      this.handleMessage(String(ev.data));
+    });
+
+    socket.addEventListener("close", (ev) => {
+      if (this.socket !== socket) return;
+      this.socket = null;
+      this.ready = false;
+      this.stopPresenceHeartbeat();
+      this.emit("disconnected", { code: ev.code, reason: ev.reason });
+      this.scheduleReconnect(generation);
+    });
+
+    socket.addEventListener("error", () => {
+      /* close handler runs reconnect */
+    });
   }
 
   private handleMessage(raw: string): void {
@@ -190,18 +279,35 @@ export class RealtimeClient {
     switch (frame.type) {
       case "hello":
       case "authed": {
-        const connId = String(
-          (frame as { connId?: string }).connId ?? `c_${this.nextRid()}`,
-        );
+        if (this.ready) break;
+        this.ready = true;
+        this.reconnectAttempt = 0;
+        const connId = String((frame as { connId?: string }).connId ?? "");
         this.emit("connected", { connId });
-        if (this.subscribedBaseId) {
-          this.subscribeBase(this.subscribedBaseId, this.afterSeq);
-        }
+        this.sendSubscribe();
+        this.startPresenceHeartbeat();
+        break;
+      }
+      case "subscribed": {
+        const f = frame as unknown as { baseId: string; seq: number };
+        const resumed = this.afterSeq > 0;
+        if (!resumed) this.afterSeq = f.seq;
+        this.emit("subscribed", { baseId: f.baseId, seq: f.seq, resumed });
+        this.sendPresence();
         break;
       }
       case "change": {
         const change = frame as RealtimeChangeFrame;
-        if (change.seq > this.afterSeq) this.afterSeq = change.seq;
+        if (this.afterSeq > 0 && change.seq <= this.afterSeq) break; // dup
+        const gap = this.afterSeq > 0 && change.seq > this.afterSeq + 1;
+        this.afterSeq = change.seq;
+        if (gap) {
+          this.emit("resync", {
+            type: "resync_required",
+            reason: "client_gap",
+            headSeq: change.seq,
+          });
+        }
         this.emit("change", change);
         break;
       }
@@ -210,16 +316,18 @@ export class RealtimeClient {
         break;
       case "op_ack": {
         const ack = frame as RealtimeOpAckFrame;
-        if (ack.seq > this.afterSeq) this.afterSeq = ack.seq;
         this.emit("op_ack", ack);
         break;
       }
       case "op_reject":
         this.emit("op_reject", frame as RealtimeOpRejectFrame);
         break;
-      case "resync_required":
-        this.emit("resync", frame as RealtimeResyncFrame);
+      case "resync_required": {
+        const r = frame as RealtimeResyncFrame;
+        if (typeof r.headSeq === "number") this.afterSeq = r.headSeq;
+        this.emit("resync", r);
         break;
+      }
       default:
         break;
     }

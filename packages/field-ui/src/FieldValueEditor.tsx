@@ -743,7 +743,7 @@ function AttachmentEditor(props: FieldValueEditorProps): ReactElement {
     <div
       ref={boxRef}
       className={mode === "cell" ? "tfu-cell-box" : undefined}
-      style={mode === "cell" ? { position: "absolute", left: -2, top: -2, zIndex: 20, minWidth: 260, border: "2px solid #2d7ff9", borderRadius: 4, boxShadow: "0 8px 24px rgba(15,23,42,.18)" } : undefined}
+      style={mode === "cell" ? { position: "absolute", left: -2, top: -2, zIndex: 20, minWidth: 260, border: "2px solid #458fff", borderRadius: 4, boxShadow: "0 8px 24px rgba(15,23,42,.18)" } : undefined}
       onKeyDown={(e) => {
         if (mode === "cell" && e.key === "Escape") {
           e.stopPropagation();

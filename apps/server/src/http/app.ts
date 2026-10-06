@@ -28,7 +28,7 @@ import type { Env } from "@tabula/config";
 
 /**
  * Origins allowed to make credentialed cross-origin calls: the web app, the
- * public share app (PUBLIC_APP_URL; dev default = web port + 1, i.e. 5184),
+ * public share app (PUBLIC_APP_URL; dev fallback = web port + 1),
  * plus anything listed in CORS_ORIGINS (comma separated).
  */
 export function corsOrigins(env: Env): Set<string> {
@@ -42,8 +42,8 @@ export function corsOrigins(env: Env): Set<string> {
     }
   };
   add(env.APP_URL);
-  add(process.env.PUBLIC_APP_URL);
-  for (const o of (process.env.CORS_ORIGINS ?? "").split(",")) add(o.trim() || undefined);
+  add(process.env["PUBLIC_APP_URL"]);
+  for (const o of (process.env["CORS_ORIGINS"] ?? "").split(",")) add(o.trim() || undefined);
   if (env.NODE_ENV !== "production") {
     try {
       const app = new URL(env.APP_URL);
@@ -55,7 +55,6 @@ export function corsOrigins(env: Env): Set<string> {
     } catch {
       /* ignore */
     }
-    if (!process.env.PUBLIC_APP_URL) out.add("http://localhost:5184");
   }
   return out;
 }

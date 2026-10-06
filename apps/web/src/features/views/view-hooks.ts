@@ -152,3 +152,97 @@ export function useRecordCacheUpdater(queryKey: unknown[]) {
     [qc, JSON.stringify(queryKey)],
   );
 }
+
+/** Record writes used by non-grid views, with optimistic cache updates. */
+export function useRecordWrites(baseId: string, tableId: string, queryKey: unknown[]) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const invalidate = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["records", baseId, tableId] });
+  }, [qc, baseId, tableId]);
+
+  const setRecords = useCallback(
+    (fn: (rs: ViewRecord[]) => ViewRecord[]) => {
+      qc.setQueryData<ViewRecord[]>(queryKey, (old) => (old ? fn(old) : old));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qc, JSON.stringify(queryKey)],
+  );
+
+  const fail = useCallback(
+    (err: unknown) => {
+      setError(err instanceof Error ? err.message : "Could not save");
+      window.setTimeout(() => setError(null), 5000);
+      invalidate();
+    },
+    [invalidate],
+  );
+
+  const patchFields = useCallback(
+    async (recordId: string, fields: Record<string, unknown>, optimistic?: Record<string, unknown>) => {
+      const shown = optimistic ?? fields;
+      setRecords((rs) =>
+        rs.map((r) => {
+          if (r.id !== recordId) return r;
+          const next = { ...r.fields };
+          for (const [k, v] of Object.entries(shown)) {
+            if (v === null || v === undefined || (Array.isArray(v) && v.length === 0)) delete next[k];
+            else next[k] = v;
+          }
+          return { ...r, fields: next };
+        }),
+      );
+      try {
+        const rec = await viewRecordsApi.patch(baseId, tableId, recordId, fields);
+        if (rec) setRecords((rs) => rs.map((r) => (r.id === recordId ? { ...r, ...rec } : r)));
+        invalidate();
+        return rec;
+      } catch (err) {
+        fail(err);
+        return null;
+      }
+    },
+    [baseId, tableId, setRecords, invalidate, fail],
+  );
+
+  const create = useCallback(
+    async (fields: Record<string, unknown>) => {
+      try {
+        const rec = await viewRecordsApi.create(baseId, tableId, fields);
+        if (rec) setRecords((rs) => [...rs, rec]);
+        invalidate();
+        return rec;
+      } catch (err) {
+        fail(err);
+        return null;
+      }
+    },
+    [baseId, tableId, setRecords, invalidate, fail],
+  );
+
+  const move = useCallback(
+    async (recordId: string, pos: { before?: string | null; after?: string | null }) => {
+      try {
+        await viewRecordsApi.move(baseId, tableId, recordId, pos);
+        invalidate();
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [baseId, tableId, invalidate, fail],
+  );
+
+  return { patchFields, create, move, setRecords, error, invalidate };
+}
+
+export interface ViewComponentProps {
+  baseId: string;
+  table: TableDto;
+  view: ViewDto | undefined;
+  config: ViewConfig;
+  update: (patch: Partial<ViewConfig>) => void;
+  canEdit: boolean;
+  search: string;
+  onOpenRecord: (recordId: string) => void;
+  onCount?: (n: number) => void;
+}

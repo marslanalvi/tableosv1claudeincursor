@@ -3,7 +3,7 @@ import { evaluateFormula, type FormulaContext } from "./evaluate.js";
 
 export type CompiledFormula = (ctx: FormulaContext) => ReturnType<typeof evaluateFormula>;
 
-/** Compile AST to a reusable evaluator closure (Pratt parse → evaluate). */
+/** Compile AST to a reusable evaluator closure. */
 export function compileFormula(ast: FormulaAst): CompiledFormula {
   return (ctx) => evaluateFormula(ast, ctx);
 }

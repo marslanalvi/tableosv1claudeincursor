@@ -41,27 +41,23 @@ export async function sendAttachmentBody(
   reply: FastifyReply,
   row: AttachmentRow,
   download: boolean,
-): Promise<void> {
+): Promise<FastifyReply> {
   if (row.storage_driver !== "local") {
     if (!ctx.storage) {
-      void reply.code(503).send({ detail: "Storage unavailable" });
-      return;
+      return reply.code(503).send({ detail: "Storage unavailable" });
     }
     const signed = await ctx.storage.presignDownload(row.object_key);
-    void reply.redirect(signed.url, 302);
-    return;
+    return reply.redirect(signed.url, 302);
   }
   const storage = resolveAttachmentStorage(ctx);
   if (!storage) {
-    void reply.code(503).send({ detail: "Storage unavailable" });
-    return;
+    return reply.code(503).send({ detail: "Storage unavailable" });
   }
   const stream = await storage.openReadStream(row.object_key);
   const inline = !download && INLINE_MIME.test(row.mime);
   const filename = sanitizeFilename(row.filename).replace(/"/g, "");
-  void reply
+  return reply
     .header("Content-Type", row.mime || "application/octet-stream")
-    .header("Content-Length", String(row.size_bytes))
     .header("X-Content-Type-Options", "nosniff")
     .header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
     .header("Cache-Control", "private, max-age=3600")
@@ -232,7 +228,7 @@ export async function registerAttachmentsRoutes(
           notFound(request, reply, "Attachment not found");
           return;
         }
-        await sendAttachmentBody(ctx, reply, row, request.query.download === "1");
+        return await sendAttachmentBody(ctx, reply, row, request.query.download === "1");
       } catch (err) {
         handleWave4Error(request, reply, err);
       }
@@ -256,7 +252,7 @@ export async function registerAttachmentsRoutes(
           notFound(request, reply, "File not found");
           return;
         }
-        await sendAttachmentBody(ctx, reply, row, request.query.download === "1");
+        return await sendAttachmentBody(ctx, reply, row, request.query.download === "1");
       } catch (err) {
         handleWave4Error(request, reply, err);
       }

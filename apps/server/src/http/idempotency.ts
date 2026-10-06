@@ -169,7 +169,7 @@ export async function registerIdempotency(
     }
     const key = request.idempotencyKey;
     const workspaceId = request.idempotencyWorkspaceId;
-    request.idempotencyKey = undefined;
+    delete request.idempotencyKey;
 
     try {
       if (reply.statusCode >= 500) {
