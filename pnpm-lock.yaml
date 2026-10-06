@@ -327,6 +327,9 @@ importers:
       '@tabula/fields':
         specifier: workspace:*
         version: link:../fields
+      '@tabula/formula':
+        specifier: workspace:*
+        version: link:../formula
     devDependencies:
       '@tabula/tsconfig':
         specifier: workspace:*
