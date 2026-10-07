@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   FieldUiServicesProvider,
   cellValueToText,
@@ -41,10 +42,11 @@ async function fallbackUpload(baseId: string, file: File, onProgress?: (f: numbe
     xhr.onerror = () => reject(new Error("Upload failed"));
     xhr.send(file);
   });
-  await request(`/v1/bases/${baseId}/attachments/complete`, {
+  const done = await request<{ attachment?: AttachmentValue }>(`/v1/bases/${baseId}/attachments/complete`, {
     method: "POST",
     json: { attachmentId: presign.attachmentId },
   });
+  if (done?.attachment?.id) return done.attachment;
   let url: string | null = null;
   try {
     const got = await request<{ attachment?: { url?: string }; url?: string }>(
@@ -61,7 +63,10 @@ export async function uploadAttachment(baseId: string, file: File, onProgress?: 
   const loader = filesModules["../../lib/api-areas/files.ts"];
   if (loader) {
     const mod = (await loader()) as { uploadAttachment?: UploadFn };
-    if (mod.uploadAttachment) return mod.uploadAttachment(baseId, file, onProgress);
+    if (mod.uploadAttachment) {
+      const att = await mod.uploadAttachment(baseId, file, onProgress);
+      if (att?.id) return att;
+    }
   }
   return fallbackUpload(baseId, file, onProgress);
 }
@@ -92,6 +97,7 @@ export function useFieldServices(baseId: string): FieldUiServices {
       (qc.getQueryData<BaseDetail>(["bases", baseId])?.tables ?? tables ?? []).find((t) => t.id === id);
     return {
       tables: (tables ?? []) as unknown as TableLike[],
+      portal: (node) => createPortal(node, document.body),
       async searchRecords(tableId, query) {
         const t = tableById(tableId);
         const page = await recordsApi.query(baseId, tableId, { search: query, pageSize: 50 });

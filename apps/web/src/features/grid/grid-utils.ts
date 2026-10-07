@@ -43,6 +43,28 @@ function isEmpty(v: unknown): boolean {
   return v === null || v === undefined || v === "" || v === false || (Array.isArray(v) && v.length === 0);
 }
 
+/** Display text for a summary value (server aggregate or client-computed). */
+export function formatSummary(field: FieldLike, kind: SummaryKind, value: unknown): string {
+  if (kind === "none") return "";
+  if (value === null || value === undefined) return "—";
+  if (kind === "count" || kind === "empty" || kind === "filled" || kind === "unique") return Number(value).toLocaleString();
+  if (typeof value === "string" && !/^-?\d+(\.\d+)?$/.test(value)) {
+    // min/max of dates come back as date strings.
+    return cellValueToText(field, value) || value;
+  }
+  const n = toNumber(value);
+  if (n === null) return String(value);
+  const text = cellValueToText(field.type === "formula" || field.type === "rollup" ? { ...field, type: "number" } : field, n);
+  return text || String(Math.round(n * 100) / 100);
+}
+
+/** Server aggregate op + response key for a summary kind (`POST …/records/group`). */
+export function summaryAggregate(fieldId: string, kind: SummaryKind): { op: string; fieldId?: string; key: string } | null {
+  if (kind === "none") return null;
+  if (kind === "count") return { op: "count", key: "count" };
+  return { op: kind, fieldId, key: `${kind}:${fieldId}` };
+}
+
 /** Summary over loaded records; returns display text. */
 export function computeSummary(
   field: FieldLike,
@@ -53,13 +75,13 @@ export function computeSummary(
   const values = records.map((r) => r.fields[field.id]);
   switch (kind) {
     case "count":
-      return String(values.length);
+      return formatSummary(field, kind, values.length);
     case "empty":
-      return String(values.filter(isEmpty).length);
+      return formatSummary(field, kind, values.filter(isEmpty).length);
     case "filled":
-      return String(values.filter((v) => !isEmpty(v)).length);
+      return formatSummary(field, kind, values.filter((v) => !isEmpty(v)).length);
     case "unique":
-      return String(new Set(values.filter((v) => !isEmpty(v)).map((v) => JSON.stringify(v))).size);
+      return formatSummary(field, kind, new Set(values.filter((v) => !isEmpty(v)).map((v) => JSON.stringify(v))).size);
     default: {
       const nums = values.map((v) => toNumber(v)).filter((n): n is number => n !== null);
       if (nums.length === 0) return "—";
@@ -68,8 +90,7 @@ export function computeSummary(
       else if (kind === "avg") n = nums.reduce((a, b) => a + b, 0) / nums.length;
       else if (kind === "min") n = Math.min(...nums);
       else n = Math.max(...nums);
-      const text = cellValueToText(field.type === "formula" || field.type === "rollup" ? { ...field, type: "number" } : field, n);
-      return text || String(Math.round(n * 100) / 100);
+      return formatSummary(field, kind, n);
     }
   }
 }

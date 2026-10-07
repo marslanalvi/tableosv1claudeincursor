@@ -47,12 +47,6 @@ function unwrapRecord(res: unknown): RecordWire {
   return (r && r.record ? r.record : r && r.id ? r : null) as RecordWire;
 }
 
-/**
- * Reads sent as POST (query) must not carry an Idempotency-Key: request()
- * adds one to every POST, an empty value opts out (server ignores empty keys).
- */
-const READ_ONLY_POST = { "Idempotency-Key": "" };
-
 export const recordsApi = {
   query(baseId: string, tableId: string, body: RecordsQueryBody, signal?: AbortSignal) {
     const clean: Record<string, unknown> = { ...body };
@@ -62,10 +56,27 @@ export const recordsApi = {
     if (Array.isArray(clean["sort"]) && (clean["sort"] as unknown[]).length === 0) delete clean["sort"];
     return request<RecordsPage>(`${tbl(baseId, tableId)}/records/query`, {
       method: "POST",
-      headers: READ_ONLY_POST,
       json: clean,
       ...(signal ? { signal } : {}),
     });
+  },
+
+  /** Aggregates over every matching record (`POST …/records/group` without groupBy). */
+  async aggregate(
+    baseId: string,
+    tableId: string,
+    body: { filter?: FilterAst | null; search?: string; aggregates: { op: string; fieldId?: string }[] },
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const json: Record<string, unknown> = { aggregates: body.aggregates };
+    if (body.filter) json["filter"] = body.filter;
+    if (body.search) json["search"] = body.search;
+    const res = await request<{ groups: { count: number; aggregates: Record<string, unknown> }[] }>(
+      `${tbl(baseId, tableId)}/records/group`,
+      { method: "POST", json, ...(signal ? { signal } : {}) },
+    );
+    const g = res?.groups?.[0];
+    return g ? { count: g.count, ...g.aggregates } : { count: 0 };
   },
 
   async get(baseId: string, tableId: string, recordId: string) {

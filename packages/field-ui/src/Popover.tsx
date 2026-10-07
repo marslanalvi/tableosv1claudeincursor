@@ -6,6 +6,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useFieldUiServices } from "./services.js";
 import { ensureFieldUiStyles } from "./styles.js";
 
 /**
@@ -26,6 +27,7 @@ export function Popover({
   align?: "start" | "end";
 }): ReactElement | null {
   ensureFieldUiStyles();
+  const services = useFieldUiServices();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const onCloseRef = useRef(onClose);
@@ -69,7 +71,7 @@ export function Popover({
   }, [anchor]);
 
   if (!anchor) return null;
-  return (
+  const node = (
     <div
       ref={ref}
       className="tfu-pop"
@@ -80,10 +82,12 @@ export function Popover({
       }}
       onMouseDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
     >
       {children}
     </div>
   );
+  return <>{services.portal ? services.portal(node) : node}</>;
 }
 
 export interface MenuItem {

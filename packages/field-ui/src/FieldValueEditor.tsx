@@ -13,6 +13,7 @@ import {
   isoToLocalInput,
   localInputToIso,
   parseDuration,
+  parseTextToValue,
   selectOptions,
   toNumber,
   userLabel,
@@ -129,6 +130,24 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * Runs `fn` when the component really unmounts. StrictMode's simulated
+ * unmount/remount must not trigger it (it would commit a half-typed draft).
+ */
+function useCommitOnUnmount(fn: () => void) {
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const generation = useRef(0);
+  useEffect(() => {
+    const gen = ++generation.current;
+    return () => {
+      queueMicrotask(() => {
+        if (generation.current === gen) fnRef.current();
+      });
+    };
+  }, []);
+}
+
+/**
  * Commit-once draft helper for text-like editors: commits on explicit
  * finish, on blur, and (as a safety net) on unmount if still dirty.
  */
@@ -162,13 +181,9 @@ function useDraft(field: FieldLike, value: unknown, initialText: string | undefi
     if (!sameValue(next, valueRef.current)) onChangeRef.current(next);
   };
 
-  useEffect(
-    () => () => {
-      if (!finalized.current) commit();
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
+  useCommitOnUnmount(() => {
+    if (!finalized.current) commit();
+  });
 
   return {
     draft,
@@ -204,15 +219,16 @@ function TextEditor(props: FieldValueEditorProps): ReactElement {
     else el.setSelectionRange(el.value.length, el.value.length);
   }, [autoFocus, mode, initialText]);
 
-  const inputType =
-    field.type === "email" ? "email" : field.type === "url" ? "url" : field.type === "phone" ? "tel" : "text";
+  // type="email"/"url" inputs don't support selection APIs; hint the keyboard instead.
+  const inputMode =
+    field.type === "email" ? "email" : field.type === "url" ? "url" : field.type === "phone" ? "tel" : isNumeric ? "decimal" : undefined;
 
   return (
     <input
       ref={ref}
       className={mode === "cell" ? "tfu-cell-input" : "tfu-input"}
-      type={inputType}
-      inputMode={isNumeric ? "decimal" : undefined}
+      type="text"
+      inputMode={inputMode}
       value={d.draft}
       placeholder={placeholder ?? (field.type === "duration" ? "h:mm" : undefined)}
       style={isNumeric && mode === "cell" ? { textAlign: "right" } : undefined}
@@ -283,7 +299,169 @@ function LongTextEditor(props: FieldValueEditorProps): ReactElement {
   );
 }
 
+/** Typed date text ("12/25/2026", "2026-12-25", "Dec 25", "today") → wire value; `undefined` if unparseable. */
+function parseDateDraft(field: FieldLike, text: string): unknown {
+  const t = text.trim().toLowerCase();
+  if (!t) return null;
+  const rel: Record<string, number> = { today: 0, now: 0, tomorrow: 1, yesterday: -1 };
+  if (t in rel) {
+    const d = new Date();
+    d.setDate(d.getDate() + rel[t]!);
+    if (field.type === "datetime") return (t === "now" ? new Date() : d).toISOString();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  let s = text.trim();
+  if (field.type === "date" && cfg(field)["format"] === "eu") {
+    const m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(s);
+    if (m) s = `${m[2]}/${m[1]}/${m[3]}`;
+  }
+  // "Dec 25" without a year: assume the current year.
+  if (!/\d{4}/.test(s) && /[a-z]/i.test(s)) s = `${s} ${new Date().getFullYear()}`;
+  if (field.type === "datetime" && /^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}/.test(s)) s = s.replace(" ", "T");
+  return parseTextToValue(field, s);
+}
+
+function dateDraftOf(field: FieldLike, value: unknown): string {
+  if (typeof value !== "string" || !value) return "";
+  if (field.type === "datetime") return isoToLocalInput(value).replace("T", " ");
+  return value.slice(0, 10);
+}
+
 function DateEditor(props: FieldValueEditorProps): ReactElement {
+  if ((props.mode ?? "form") === "cell") return <DateCellEditor {...props} />;
+  return <DateFormEditor {...props} />;
+}
+
+/** In-grid date editor: type a date, or open the native picker from the calendar button. */
+function DateCellEditor(props: FieldValueEditorProps): ReactElement {
+  const { field, value, onChange, initialText, onDone } = props;
+  const isDT = field.type === "datetime";
+  const [draft, setDraft] = useState(() => initialText ?? dateDraftOf(field, value));
+  const [invalid, setInvalid] = useState(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const dirty = useRef(initialText !== undefined);
+  const finalized = useRef(false);
+  const ref = useRef<HTMLInputElement>(null);
+  const pickerRef = useRef<HTMLInputElement>(null);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const commit = () => {
+    if (!dirty.current) return true;
+    const next = parseDateDraft(field, draftRef.current);
+    if (next === undefined) return false;
+    dirty.current = false;
+    if (!sameValue(next, valueRef.current)) onChangeRef.current(next);
+    return true;
+  };
+  useCommitOnUnmount(() => {
+    if (!finalized.current) commit();
+  });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    if (initialText === undefined) el.select();
+    else el.setSelectionRange(el.value.length, el.value.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const finish = (reason: EditDoneReason) => {
+    if (finalized.current) return;
+    if (reason !== "escape" && !commit()) {
+      if (reason === "blur") {
+        // Unparseable text on click-away: keep the old value.
+        finalized.current = true;
+        onDone?.(reason);
+        return;
+      }
+      setInvalid(true);
+      return;
+    }
+    finalized.current = true;
+    onDone?.(reason);
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", height: "100%", width: "100%" }}>
+      <input
+        ref={ref}
+        className="tfu-cell-input"
+        value={draft}
+        placeholder={isDT ? "YYYY-MM-DD HH:mm" : "MM/DD/YYYY or YYYY-MM-DD"}
+        aria-invalid={invalid || undefined}
+        style={invalid ? { color: "#aa2d00" } : undefined}
+        onChange={(e) => {
+          dirty.current = true;
+          setInvalid(false);
+          setDraft(e.target.value);
+        }}
+        onBlur={(e) => {
+          if (e.relatedTarget && e.relatedTarget === pickerRef.current) return;
+          finish("blur");
+        }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            finish("enter");
+          } else if (e.key === "Tab") {
+            e.preventDefault();
+            finish(e.shiftKey ? "shift-tab" : "tab");
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            finish("escape");
+          }
+        }}
+      />
+      <span style={{ position: "relative", flex: "none" }}>
+        <button
+          type="button"
+          className="tfu-chip-x"
+          aria-label="Open date picker"
+          title="Pick a date"
+          style={{ fontSize: 13, padding: "0 6px" }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const p = pickerRef.current;
+            if (!p) return;
+            p.value = isDT ? draftRef.current.replace(" ", "T") : draftRef.current;
+            try {
+              p.showPicker();
+            } catch {
+              p.focus();
+            }
+          }}
+        >
+          ▦
+        </button>
+        <input
+          ref={pickerRef}
+          type={isDT ? "datetime-local" : "date"}
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{ position: "absolute", right: 0, bottom: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0 }}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!v) return;
+            dirty.current = true;
+            const text = isDT ? v.replace("T", " ") : v;
+            draftRef.current = text;
+            setDraft(text);
+            setInvalid(false);
+            if (!isDT) finish("enter");
+            else ref.current?.focus();
+          }}
+        />
+      </span>
+    </div>
+  );
+}
+
+function DateFormEditor(props: FieldValueEditorProps): ReactElement {
   const { field, value, onChange, mode = "form", autoFocus, onDone } = props;
   const isDT = field.type === "datetime";
   const initial = typeof value === "string" ? (isDT ? isoToLocalInput(value) : value.slice(0, 10)) : "";
@@ -307,13 +485,9 @@ function DateEditor(props: FieldValueEditorProps): ReactElement {
     if (d && next === null) return;
     if (!sameValue(next, valueRef.current)) onChangeRef.current(next);
   };
-  useEffect(
-    () => () => {
-      if (!finalized.current && mode === "cell") commit();
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
+  useCommitOnUnmount(() => {
+    if (!finalized.current && mode === "cell") commit();
+  });
   useLayoutEffect(() => {
     if (autoFocus ?? mode === "cell") ref.current?.focus();
   }, [autoFocus, mode]);

@@ -1,9 +1,12 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { FIELD_TYPES, fieldTypeIcon, fieldTypeLabel } from "@tabula/field-ui";
 import type { TableDto } from "../../lib/api.ts";
 import type { FieldWire } from "../../lib/api-areas/fields.ts";
+import { errorMessage } from "../../lib/api-areas/records.ts";
+import { viewConfigOf, viewsApi } from "../../lib/api-areas/views.ts";
 import { ConfirmDialog } from "../grid/Menu.tsx";
-import { Toaster } from "../grid/toast.tsx";
+import { Toaster, toastError } from "../grid/toast.tsx";
 import { FieldDialog } from "./FieldDialog.tsx";
 import { useFieldActions } from "./field-actions.ts";
 import styles from "./field-dialog.module.css";
@@ -16,17 +19,38 @@ export function FieldManager({
   baseId,
   table,
   onClose,
-  hiddenFieldIds,
-  onHiddenChange,
+  viewId,
+  hiddenFieldIds: hiddenProp,
+  onHiddenChange: onHiddenProp,
 }: {
   baseId: string;
   table: TableDto;
   onClose: () => void;
-  /** Current view's hidden fields (enables the "visible" toggles). */
+  /** Current view: enables the "visible" toggles, saved to that view's config. */
+  viewId?: string | null | undefined;
+  /** Controlled alternative to `viewId`. */
   hiddenFieldIds?: string[];
   onHiddenChange?: (hiddenFieldIds: string[]) => void;
 }) {
   const actions = useFieldActions(baseId, table.id);
+  const qc = useQueryClient();
+  const view = viewId ? table.views?.find((v) => v.id === viewId) : undefined;
+  const [localHidden, setLocalHidden] = useState<string[] | null>(null);
+  const hiddenFieldIds = hiddenProp ?? localHidden ?? (view ? viewConfigOf(view as never).hiddenFieldIds : undefined);
+  const onHiddenChange =
+    onHiddenProp ??
+    (view
+      ? (ids: string[]) => {
+          setLocalHidden(ids);
+          viewsApi
+            .patch(baseId, table.id, view.id, { config: { hiddenFieldIds: ids } })
+            .catch((e: unknown) => {
+              setLocalHidden(null);
+              toastError(`Couldn't update the view: ${errorMessage(e)}`);
+            })
+            .finally(() => void qc.invalidateQueries({ queryKey: ["bases", baseId] }));
+        }
+      : undefined);
   const fields = table.fields as unknown as FieldWire[];
   const [order, setOrder] = useState<string[]>(() => fields.map((f) => f.id));
   const [names, setNames] = useState<Record<string, string>>({});

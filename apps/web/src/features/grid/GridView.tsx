@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import {
   useCallback,
   useEffect,
@@ -50,10 +50,12 @@ import {
   SUMMARY_LABEL,
   barColor,
   computeSummary,
+  formatSummary,
   groupKeyOf,
   isEditableField,
   matchesFilter,
   parseTsv,
+  summaryAggregate,
   summaryKindsFor,
   toHtmlTable,
   toTsv,
@@ -137,9 +139,16 @@ export function GridView(props: GridViewProps) {
     color,
     summary,
     canEdit,
-    onConfigChange,
+    onConfigChange: saveViewConfig,
     onOpenRecord,
   } = props;
+  // Without edit rights the server rejects view config PATCHes (403); width changes stay local.
+  const onConfigChange = useCallback(
+    (patch: Partial<ViewConfig>) => {
+      if (canEdit) saveViewConfig(patch);
+    },
+    [canEdit, saveViewConfig],
+  );
   const qc = useQueryClient();
   const services = useFieldServices(baseId);
   const fieldActions = useFieldActions(baseId, table.id);
@@ -210,7 +219,6 @@ export function GridView(props: GridViewProps) {
     placeholderData: (prev) => prev,
   });
   const pages = query.data?.pages;
-  (window as unknown as Record<string, unknown>)["__gridDebug"] = { data: query.data, status: query.status, fetch: query.fetchStatus, key: queryKey };
   const lookupMap = useMemo(() => {
     const m = new Map<string, RecordWire>();
     for (const p of pages ?? []) for (const r of p?.records ?? []) m.set(r.id, r);
@@ -235,6 +243,42 @@ export function GridView(props: GridViewProps) {
 
   const totalCount = pages?.[0]?.totalCount;
   const hasMore = !!query.hasNextPage;
+
+  // Summary bar: server aggregates cover every matching record, not just loaded pages.
+  const summaryAggs = useMemo(() => {
+    const out: { op: string; fieldId?: string; key: string }[] = [];
+    for (const f of allFields) {
+      const a = summaryAggregate(f.id, (summary?.[f.id] ?? "none") as SummaryKind);
+      if (a && !out.some((x) => x.key === a.key)) out.push(a);
+    }
+    return out;
+  }, [allFields, summary]);
+  const summaryKey = useMemo(
+    () => ["records", baseId, table.id, "summary", view.id, filter ?? null, term, summaryAggs.map((a) => a.key)],
+    [baseId, table.id, view.id, filter, term, summaryAggs],
+  );
+  const summaryQuery = useQuery({
+    queryKey: summaryKey,
+    enabled: summaryAggs.length > 0 && hasMore,
+    queryFn: async ({ signal }) => {
+      const body = { filter: filter ?? null, search: term };
+      const strip = (list: typeof summaryAggs) => list.map(({ op, fieldId }) => (fieldId ? { op, fieldId } : { op }));
+      try {
+        return await recordsApi.aggregate(baseId, table.id, { ...body, aggregates: strip(summaryAggs) }, signal);
+      } catch {
+        // One unsupported aggregate fails the whole request; keep the others.
+        return recordsApi.aggregate(baseId, table.id, { ...body, aggregates: strip(summaryAggs.filter((a) => a.op !== "unique")) }, signal);
+      }
+    },
+    placeholderData: (prev) => prev,
+    staleTime: 5_000,
+  });
+  const summaryEnabled = summaryAggs.length > 0 && hasMore;
+  useEffect(() => {
+    if (!summaryEnabled) return;
+    const t = setTimeout(() => void qc.invalidateQueries({ queryKey: summaryKey, exact: true }), 400);
+    return () => clearTimeout(t);
+  }, [lookupMap, summaryEnabled, summaryKey, qc]);
 
   // Group-by needs everything loaded to show correct groups/counts.
   useEffect(() => {
@@ -811,14 +855,14 @@ export function GridView(props: GridViewProps) {
         { key: "copyurl", icon: "🔗", label: "Copy field URL", onSelect: () => void copyText(`${window.location.origin}${window.location.pathname}?field=${field.id}`) },
         { key: "copyid", icon: "#", label: "Copy field ID", hint: field.id, onSelect: () => void copyText(field.id) },
         { key: "d1", label: "", divider: true },
-        { key: "asc", icon: "↧", label: "Sort A → Z", onSelect: () => onConfigChange({ sorts: [{ fieldId: field.id, direction: "asc" }] }) },
-        { key: "desc", icon: "↥", label: "Sort Z → A", onSelect: () => onConfigChange({ sorts: [{ fieldId: field.id, direction: "desc" }] }) },
-        { key: "filter", icon: "⚲", label: "Filter by this field", onSelect: addFilter },
+        { key: "asc", icon: "↧", label: "Sort A → Z", disabled: !canEdit, onSelect: () => onConfigChange({ sorts: [{ fieldId: field.id, direction: "asc" }] }) },
+        { key: "desc", icon: "↥", label: "Sort Z → A", disabled: !canEdit, onSelect: () => onConfigChange({ sorts: [{ fieldId: field.id, direction: "desc" }] }) },
+        { key: "filter", icon: "⚲", label: "Filter by this field", disabled: !canEdit, onSelect: addFilter },
         {
           key: "group",
           icon: "▤",
           label: alreadyGrouped ? "Remove grouping by this field" : "Group by this field",
-          disabled: !alreadyGrouped && (groups ?? []).length >= 3,
+          disabled: !canEdit || (!alreadyGrouped && (groups ?? []).length >= 3),
           onSelect: () =>
             onConfigChange({
               groups: alreadyGrouped
@@ -827,11 +871,12 @@ export function GridView(props: GridViewProps) {
             }),
         },
         { key: "d2", label: "", divider: true },
-        { key: "hide", icon: "◌", label: "Hide field", disabled: isPrimary, onSelect: () => onConfigChange({ hiddenFieldIds: [...hiddenFieldIds, field.id] }) },
+        { key: "hide", icon: "◌", label: "Hide field", disabled: isPrimary || !canEdit, onSelect: () => onConfigChange({ hiddenFieldIds: [...hiddenFieldIds, field.id] }) },
         {
           key: "freeze",
           icon: "❄",
           label: colIdx + 1 === frozenCount ? "Unfreeze to primary field" : "Freeze up to here",
+          disabled: !canEdit,
           onSelect: () => onConfigChange({ frozenFieldCount: colIdx + 1 === frozenCount ? 1 : colIdx + 1 }),
         },
         { key: "d3", label: "", divider: true },
@@ -865,11 +910,12 @@ export function GridView(props: GridViewProps) {
           key: k,
           icon: cur === k ? "✓" : "",
           label: SUMMARY_LABEL[k],
+          disabled: !canEdit,
           onSelect: () => onConfigChange({ summary: { ...(summary ?? {}), [field.id]: k } as ViewConfig["summary"] }),
         })),
       });
     },
-    [summary, onConfigChange],
+    [summary, onConfigChange, canEdit],
   );
 
   // ------------------------------------------------------------------ header drag (resize / reorder)
@@ -1155,7 +1201,7 @@ export function GridView(props: GridViewProps) {
       return;
     }
     if (key.length === 1 && !mod && !e.altKey && field) {
-      const textual = !["single_select", "multi_select", "collaborator", "link", "attachment", "rating", "date", "datetime", "checkbox"].includes(field.type);
+      const textual = !["single_select", "multi_select", "collaborator", "link", "attachment", "rating", "checkbox"].includes(field.type);
       if (field.type === "rating" && /^[0-9]$/.test(key) && isEditableField(field, canEdit)) {
         e.preventDefault();
         void writes.writeRecord(active.r, { [field.id]: Number(key) || null });
@@ -1338,6 +1384,13 @@ export function GridView(props: GridViewProps) {
     }
   }
 
+  const summaryText = (f: Field, kind: SummaryKind) => {
+    const agg = summaryAggregate(f.id, kind);
+    const server = summaryQuery.data;
+    if (hasMore && agg && server && agg.key in server) return formatSummary(f, kind, server[agg.key]);
+    return computeSummary(f, kind, records) + (hasMore ? "+" : "");
+  };
+
   const bodyHeight = offsets.height + ADD_ROW_H + (query.isFetchingNextPage ? 32 : 0);
   const shownCount = typeof totalCount === "number" ? totalCount : records.length;
 
@@ -1507,7 +1560,7 @@ export function GridView(props: GridViewProps) {
                     ) : (
                       <>
                         <span>{SUMMARY_LABEL[kind]}</span>
-                        <span className={styles.scellValue}>{computeSummary(c.field, kind, records)}</span>
+                        <span className={styles.scellValue}>{summaryText(c.field, kind)}</span>
                       </>
                     )}
                   </button>

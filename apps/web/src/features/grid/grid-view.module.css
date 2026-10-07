@@ -11,7 +11,8 @@
   --strong: #e0e2e6;
   --link: #1b61c9;
   --focus: #458fff;
-  --focus-bg: rgba(69, 143, 255, 0.1);
+  /* Opaque (≈ rgba(69,143,255,.1) on white): frozen cells must hide what scrolls beneath. */
+  --focus-bg: #ecf4ff;
   --danger: #aa2d00;
   position: relative;
   flex: 1;
@@ -276,7 +277,7 @@
 }
 
 .fillPreview {
-  background: rgba(69, 143, 255, 0.06) !important;
+  background: #f4f8ff !important;
   outline: 1px dashed var(--focus);
   outline-offset: -1px;
 }

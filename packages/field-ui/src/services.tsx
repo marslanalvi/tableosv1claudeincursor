@@ -25,6 +25,11 @@ export interface FieldUiServices {
   createSelectOption?(field: FieldLike, label: string): Promise<SelectOption>;
   /** Tables of the base (used by link pickers and config editors). */
   tables?: TableLike[] | undefined;
+  /**
+   * Render popovers/modals outside the host's stacking contexts, e.g.
+   * `(node) => createPortal(node, document.body)`. Rendered inline when absent.
+   */
+  portal?(node: ReactNode): ReactNode;
 }
 
 const Ctx = createContext<FieldUiServices>({});

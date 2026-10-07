@@ -71,16 +71,23 @@ export function LinkRecordPicker({
     }
   };
 
-  return (
+  const modal = (
     <div
       className="tfu-modal-back"
       onMouseDown={(e) => {
         e.stopPropagation();
         if (e.target === e.currentTarget) onClose();
       }}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape" && !e.defaultPrevented) {
+          e.preventDefault();
+          onClose();
+        }
+      }}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="tfu-modal" role="dialog" aria-label="Link records">
         <div className="tfu-modal-head">
@@ -124,6 +131,7 @@ export function LinkRecordPicker({
                 className={`tfu-rec ${sel ? "sel" : ""}`}
                 style={idx === active ? { borderColor: "#458fff" } : undefined}
                 onMouseEnter={() => setActive(idx)}
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onPick(r)}
               >
                 <strong>{r.name || "Unnamed record"}</strong>
@@ -140,6 +148,7 @@ export function LinkRecordPicker({
               className="tfu-pop-item"
               style={{ width: "100%", marginTop: 4 }}
               disabled={creating}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => void create()}
             >
               + {creating ? "Creating…" : q.trim() ? `Add new record "${q.trim()}"` : "Add new record"}
@@ -149,4 +158,5 @@ export function LinkRecordPicker({
       </div>
     </div>
   );
+  return <>{services.portal ? services.portal(modal) : modal}</>;
 }

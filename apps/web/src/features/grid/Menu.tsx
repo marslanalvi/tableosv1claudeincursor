@@ -42,22 +42,26 @@ export function Menu({
       left: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
       top: y + h > window.innerHeight - 8 ? Math.max(8, y - h) : y,
     });
-    el.focus();
+    el.focus({ preventScroll: true });
   }, [x, y]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onCloseRef.current();
     };
-    const onScroll = (e: Event) => {
+    // Close on user scroll gestures only: layout-driven scroll events (scroll clamping after
+    // columns change, scrollIntoView) must not dismiss a menu the user just opened.
+    const onGesture = (e: Event) => {
       if (!ref.current?.contains(e.target as Node)) onCloseRef.current();
     };
     document.addEventListener("mousedown", onDown, true);
-    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("wheel", onGesture, { capture: true, passive: true });
+    window.addEventListener("touchmove", onGesture, { capture: true, passive: true });
     window.addEventListener("resize", onCloseRef.current);
     return () => {
       document.removeEventListener("mousedown", onDown, true);
-      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("wheel", onGesture, true);
+      window.removeEventListener("touchmove", onGesture, true);
       window.removeEventListener("resize", onCloseRef.current);
     };
   }, []);

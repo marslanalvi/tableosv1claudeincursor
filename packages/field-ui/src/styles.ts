@@ -30,7 +30,7 @@ button.tfu-star{cursor:pointer}
 .tfu-input:focus{border-color:#458fff;box-shadow:0 0 0 3px rgba(69,143,255,.2)}
 .tfu-cell-input{width:100%;height:100%;box-sizing:border-box;border:none;outline:none;padding:0 8px;font:inherit;background:#fff;color:inherit}
 .tfu-cell-area{position:absolute;left:-2px;top:-2px;z-index:20;min-width:calc(100% + 4px);width:340px;min-height:140px;box-sizing:border-box;border:2px solid #458fff;border-radius:4px;padding:6px 8px;font:inherit;background:#fff;color:inherit;outline:none;resize:both;box-shadow:0 8px 24px rgba(15,23,42,.18)}
-.tfu-pop{position:fixed;z-index:1000;background:#fff;border:1px solid #dddddd;border-radius:10px;box-shadow:0 4px 16px rgba(24,29,38,.12);padding:6px;min-width:220px;max-width:360px;max-height:340px;display:flex;flex-direction:column;gap:4px;font-size:13px;color:#181d26}
+.tfu-pop{position:fixed;z-index:1150;background:#fff;border:1px solid #dddddd;border-radius:10px;box-shadow:0 4px 16px rgba(24,29,38,.12);padding:6px;min-width:220px;max-width:360px;max-height:340px;display:flex;flex-direction:column;gap:4px;font-size:13px;color:#181d26}
 .tfu-pop-list{overflow:auto;display:flex;flex-direction:column;gap:1px;min-height:0}
 .tfu-pop-item{display:flex;align-items:center;gap:8px;border:none;background:transparent;text-align:left;padding:5px 6px;border-radius:5px;font:inherit;cursor:pointer;color:inherit;min-height:28px}
 .tfu-pop-item:hover,.tfu-pop-item.active{background:#f8fafc}
@@ -38,7 +38,7 @@ button.tfu-star{cursor:pointer}
 .tfu-form-box{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-height:34px;box-sizing:border-box;border:1px solid #dddddd;border-radius:6px;padding:4px 6px;background:#fff;cursor:pointer}
 .tfu-form-box:hover{border-color:#9297a0}
 .tfu-cell-box{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start;align-content:flex-start;min-height:100%;box-sizing:border-box;padding:6px 8px;background:#fff}
-.tfu-modal-back{position:fixed;inset:0;z-index:1100;background:rgba(24,29,38,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:10vh}
+.tfu-modal-back{position:fixed;inset:0;z-index:1140;background:rgba(24,29,38,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:10vh}
 .tfu-modal{background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(24,29,38,.18);width:min(560px,92vw);max-height:70vh;display:flex;flex-direction:column;overflow:hidden;color:#181d26;font-size:13px}
 .tfu-modal-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #dddddd}
 .tfu-modal-body{overflow:auto;padding:6px}
