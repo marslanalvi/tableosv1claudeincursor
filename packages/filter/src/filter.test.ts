@@ -10,6 +10,9 @@ import {
   operatorsForFieldType,
   parseIsoInstant,
   resolveDateOperand,
+  emptyExpr,
+  groupKeyFor,
+  groupValueKeyFor,
   resolveWithinRange,
   sortKeysFor,
   SqlParams,
@@ -242,6 +245,36 @@ describe("SQL compiler", () => {
     const u = sortKeysFor(lk(F("u", 1, "collaborator")), "r", new SqlParams())[0]!;
     assert.equal(u.type, "text");
     assert.match(u.expr, /LIMIT 1/);
+  });
+  it("every expression builder references every parameter it adds", () => {
+    const opts = { options: [{ id: "opt_a", label: "A" }] };
+    const link = (peerPrimary: SqlFieldInfo | null): SqlFieldInfo => ({ ...F("l", 1, "link"), link: { relationId: "rel", side: "a", peerTableId: "peer", peerPrimary } });
+    const lk = (target: SqlFieldInfo): SqlFieldInfo => ({ ...F("lk", 9, "lookup", {}, true), lookupTarget: target });
+    const all: SqlFieldInfo[] = [
+      F("t", 1, "text"), F("n", 1, "number"), F("d", 1, "date"), F("dt", 1, "datetime"), F("c", 1, "checkbox"),
+      F("s", 1, "single_select", opts), F("m", 1, "multi_select", opts), F("u", 1, "collaborator"), F("by", 1, "created_by"),
+      F("at", 1, "attachment"), F("f", 1, "formula", {}, true), F("ro", 1, "rollup", { aggregation: "unique" }, true),
+      link(F("pp", 1, "text")), link(null), link(link(F("pp", 1, "text"))),
+      lk(F("s", 1, "single_select", opts)), lk(F("u", 1, "collaborator")), lk(F("at", 1, "attachment")), lk(F("n", 1, "number")),
+      lk(link(F("pp", 1, "text"))), lk(link(null)), lk(link(link(F("pp", 1, "text")))), F("lk0", 9, "lookup", {}, true),
+    ];
+    const check = (label: string, build: (p: SqlParams) => string) => {
+      const p = new SqlParams(["table"]);
+      const sql = `$1 ${build(p)}`;
+      for (let i = 1; i <= p.values.length; i++) assert.match(sql, new RegExp(`\\$${i}(?![0-9])`), `${label}: $${i} unused`);
+    };
+    for (const f of all) {
+      const label = `${f.type}${f.lookupTarget ? `→${f.lookupTarget.type}` : ""}${f.link ? (f.link.peerPrimary ? "+prim" : "-prim") : ""}`;
+      check(`${label} groupValueKeyFor`, (p) => groupValueKeyFor(f, "r", p));
+      check(`${label} groupKeyFor`, (p) => {
+        const g = groupKeyFor(f, "r", p);
+        return `${g.key} ${g.sort.expr}`;
+      });
+      check(`${label} sortKeysFor`, (p) => sortKeysFor(f, "r", p).map((k) => k.expr).join(" "));
+      check(`${label} emptyExpr`, (p) => emptyExpr(f, "r", p));
+      check(`${label} search`, (p) => compileSearchToSql("q", [f], { params: p }).sql);
+    }
+    check("search, nothing searchable", (p) => compileSearchToSql("q", [F("c", 1, "checkbox"), link(null)], { params: p }).sql);
   });
   it("search ORs display expressions", () => {
     const r = compileSearchToSql("Foo", [...new Set(sqlFields.values())]);

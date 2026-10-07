@@ -44,6 +44,14 @@ export class SqlParams {
     this.values.push(value);
     return cast ? `$${this.values.length}::${cast}` : `$${this.values.length}`;
   }
+  /** Current length, for {@link rollback}. */
+  mark(): number {
+    return this.values.length;
+  }
+  /** Drop parameters added since `mark` (their SQL must be discarded too: unreferenced params fail in Postgres). */
+  rollback(mark: number): void {
+    this.values.length = mark;
+  }
 }
 
 const NUM_RE = `'^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]{1,2})?$'`;
@@ -276,9 +284,10 @@ export function displayExpr(f: SqlFieldInfo, a: string, p: SqlParams, depth = 0)
       return m ? userNameSql(`(${m.expr})::text`) : "NULL";
     }
     case "link": {
-      const peers = linkPeersSql(f, a, p);
       const prim = f.link?.peerPrimary;
-      if (!peers || !prim || depth > 0) return "NULL";
+      if (!prim || depth > 0) return "NULL";
+      const peers = linkPeersSql(f, a, p);
+      if (!peers) return "NULL";
       return `(SELECT NULLIF(string_agg(${displayExpr(prim, "pp", p, depth + 1)}, ', ' ORDER BY pp.o, pp.id), '') FROM ${peers} pp)`;
     }
     case "checkbox":
@@ -368,8 +377,8 @@ export function sortKeysFor(f: SqlFieldInfo, a: string, p: SqlParams): SortKeySq
     case "user":
       return [{ expr: `lower(${displayExpr(f, a, p)})`, type: "text" }];
     case "link": {
-      const peers = linkPeersSql(f, a, p);
       const prim = f.link?.peerPrimary;
+      const peers = prim ? linkPeersSql(f, a, p) : null;
       if (!peers || !prim) return [{ expr: "NULL::text", type: "text" }];
       return [
         {
@@ -413,18 +422,28 @@ export function sortKeysFor(f: SqlFieldInfo, a: string, p: SqlParams): SortKeySq
  * The key is returned as jsonb so every kind groups uniformly.
  */
 export function groupKeyFor(f: SqlFieldInfo, a: string, p: SqlParams): { key: string; sort: SortKeySql } {
-  const kind = kindOf(f);
+  const key = groupValueKeyFor(f, a, p);
   const sort = sortKeysFor(f, a, p)[0] ?? { expr: "NULL::text", type: "text" as const };
+  return { key, sort };
+}
+
+/**
+ * Group key alone (jsonb). Use it when no sort key is needed: an unused sort
+ * key would leave parameters the SQL never references, which Postgres rejects
+ * ("could not determine data type of parameter $n").
+ */
+export function groupValueKeyFor(f: SqlFieldInfo, a: string, p: SqlParams): string {
+  const kind = kindOf(f);
   const m = metaColumn(f, a);
   switch (kind) {
     case "number":
-      return { key: `to_jsonb(${m ? m.expr : numExpr(f, a)})`, sort };
+      return `to_jsonb(${m ? m.expr : numExpr(f, a)})`;
     case "date":
-      return { key: `to_jsonb(${dateExpr(f, a)})`, sort };
+      return `to_jsonb(${dateExpr(f, a)})`;
     case "datetime":
-      return { key: `to_jsonb(${tsExpr(f, a)})`, sort };
+      return `to_jsonb(${tsExpr(f, a)})`;
     case "checkbox":
-      return { key: `to_jsonb(${boolExpr(f, a)})`, sort };
+      return `to_jsonb(${boolExpr(f, a)})`;
     case "single_select":
     case "multi_select": {
       // Normalize legacy label values to option ids so they group with their option.
@@ -433,30 +452,21 @@ export function groupKeyFor(f: SqlFieldInfo, a: string, p: SqlParams): { key: st
       const labels = p.add(opts.map((o) => o.label), "text[]");
       const norm = (x: string) =>
         `(CASE WHEN ${x} = ANY(${ids}) THEN ${x} ELSE COALESCE((SELECT o.i FROM unnest(${ids}, ${labels}) AS o(i, l) WHERE o.l = ${x} LIMIT 1), ${x}) END)`;
-      if (kind === "single_select") return { key: `to_jsonb(${norm(selectIdExpr(f, a))})`, sort };
-      return {
-        key: `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(${norm("s.id")} ORDER BY s.o) END FROM ${elemIdsSql(f, a)} s WHERE s.id <> '')`,
-        sort,
-      };
+      if (kind === "single_select") return `to_jsonb(${norm(selectIdExpr(f, a))})`;
+      return `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(${norm("s.id")} ORDER BY s.o) END FROM ${elemIdsSql(f, a)} s WHERE s.id <> '')`;
     }
     case "collaborator":
     case "attachment":
-      return {
-        key: `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(s.id ORDER BY s.o) END FROM ${elemIdsSql(f, a)} s WHERE s.id <> '')`,
-        sort,
-      };
+      return `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(s.id ORDER BY s.o) END FROM ${elemIdsSql(f, a)} s WHERE s.id <> '')`;
     case "user":
-      return { key: m ? `to_jsonb((${m.expr})::text)` : "NULL::jsonb", sort };
+      return m ? `to_jsonb((${m.expr})::text)` : "NULL::jsonb";
     case "link": {
       const peers = linkPeersSql(f, a, p);
-      return {
-        key: peers ? `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(pg.id::text ORDER BY pg.o, pg.id) END FROM ${peers} pg)` : "NULL::jsonb",
-        sort,
-      };
+      return peers ? `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(pg.id::text ORDER BY pg.o, pg.id) END FROM ${peers} pg)` : "NULL::jsonb";
     }
     case "array":
-      return { key: `to_jsonb(NULLIF(${lookupTextExpr(f, a, p)}, ''))`, sort };
+      return `to_jsonb(NULLIF(${lookupTextExpr(f, a, p)}, ''))`;
     default:
-      return { key: `to_jsonb(NULLIF(${textExpr(f, a)}, ''))`, sort };
+      return `to_jsonb(NULLIF(${textExpr(f, a)}, ''))`;
   }
 }

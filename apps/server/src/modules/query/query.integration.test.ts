@@ -481,6 +481,73 @@ describe("group query", () => {
     assert.equal(summary.body.groups.length, 1);
     assert.equal(summary.body.groups[0].count, all.length);
   });
+
+  // Regression: `unique` on select/link/lookup fields left sort-key parameters
+  // unreferenced → Postgres "could not determine data type of parameter $2" → 500.
+  it("every aggregate × field type × groupBy is 200 or 422, never 5xx", async () => {
+    const g = (body: unknown) => fx.api("POST", `/v1/bases/${fx.baseId}/tables/${fx.tableId}/records/group`, body);
+    const ops = ["count", "sum", "avg", "min", "max", "filled", "empty", "unique"];
+    const failures: string[] = [];
+    for (const groupBy of [undefined, [{ fieldId: fx.fields["status"]!.id }]]) {
+      for (const op of ops) {
+        for (const k of [null, ...Object.keys(fx.fields)]) {
+          const body = { ...(groupBy ? { groupBy } : {}), aggregates: [{ op, ...(k ? { fieldId: fx.fields[k]!.id } : {}) }] };
+          const res = await g(body);
+          if (res.status !== 200 && res.status !== 422) failures.push(`${op}:${k} group=${!!groupBy} → ${res.status} ${res.body?.detail}`);
+          if (res.status === 422) assert.equal(typeof res.body.detail, "string");
+        }
+      }
+    }
+    assert.deepEqual(failures, []);
+  });
+
+  it("unique counts distinct values for select / multi-select / link / lookup fields", async () => {
+    const keys = ["status", "tags", "link", "lstatus", "lowner", "lmain", "owner"];
+    const res = await fx.api("POST", `/v1/bases/${fx.baseId}/tables/${fx.tableId}/records/group`, {
+      aggregates: keys.map((k) => ({ op: "unique", fieldId: fx.fields[k]!.id })),
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const agg = res.body.groups[0].aggregates;
+    // status: legacy label "Beta" groups with opt_b, which the wire value already reflects.
+    const fid = fx.fields["status"]!.id;
+    assert.equal(agg[`unique:${fid}`], new Set(all.map((r) => r.fields[fid]).filter(Boolean)).size);
+    const tid = fx.fields["tags"]!.id;
+    assert.equal(agg[`unique:${tid}`], new Set(all.map((r) => r.fields[tid]).filter(Boolean).map((v) => JSON.stringify(v))).size);
+    for (const k of keys) assert.equal(typeof agg[`unique:${fx.fields[k]!.id}`], "number", k);
+  });
+
+  it("multi-level groupBy with filter, search and viewId", async () => {
+    const viewUuid = (await fx.pool.query(`SELECT id FROM data.views WHERE table_id = $1 AND deleted_at IS NULL LIMIT 1`, [fx.tableUuid])).rows[0]?.id;
+    const viewId = pidOf("viw" as any, viewUuid);
+    const F = (k: string) => fx.fields[k]!.id;
+    const levelSets = [
+      ["status", "tags", "link"],
+      ["lstatus", "owner", "day"],
+      ["lmain", "done", "when"],
+      ["cby", "fnum", "lowner"],
+    ];
+    const extras: Record<string, unknown>[] = [
+      { filter: { kind: "condition", fieldId: F("num"), op: "gt", value: 1 } },
+      { search: "alpha" },
+      { search: "zebra", filter: { kind: "condition", fieldId: F("lowner"), op: "contains", value: "ada" } },
+      { viewId },
+      { viewId, search: "a", filter: { kind: "condition", fieldId: F("tags"), op: "hasAnyOf", value: ["opt_x"] } },
+    ];
+    for (const levels of levelSets) {
+      for (const extra of extras) {
+        const total = await q({ ...extra, pageSize: 1 });
+        assert.equal(total.status, 200, JSON.stringify(total.body));
+        const res = await fx.api("POST", `/v1/bases/${fx.baseId}/tables/${fx.tableId}/records/group`, {
+          ...extra,
+          groupBy: levels.map((k, i) => ({ fieldId: F(k), direction: i === 1 ? "desc" : "asc" })),
+          aggregates: [{ op: "count" }, { op: "unique", fieldId: F(levels[0]!) }, { op: "sum", fieldId: F("num") }, { op: "max", fieldId: F("day") }],
+        });
+        assert.equal(res.status, 200, `${levels} ${JSON.stringify(extra)} ${JSON.stringify(res.body)}`);
+        assert.equal(res.body.groups.reduce((s: number, x: any) => s + x.count, 0), total.body.totalCount, `${levels} ${JSON.stringify(extra)}`);
+        for (const x of res.body.groups) assert.equal(x.values.length, 3);
+      }
+    }
+  });
 });
 
 describe("errors are 4xx problem+json", () => {

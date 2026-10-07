@@ -239,15 +239,24 @@ export function compileSearchToSql(
   const q = search.trim().toLowerCase();
   if (q === "") return { sql: "TRUE", params: p.values };
   const a = options.recordAlias ?? "r";
+  const start = p.mark();
   const qp = p.add(q, "text");
   const parts: string[] = [];
   for (const f of fields) {
     const kind = kindOf(f);
     if (kind === "checkbox" || kind === "none" || kind === "attachment") continue;
     if (kind === "datetime" && metaColumn(f, a)) continue;
+    const m = p.mark();
     const d = displayExpr(f, a, p);
-    if (d === "NULL") continue;
+    if (d === "NULL") {
+      p.rollback(m);
+      continue;
+    }
     parts.push(`COALESCE(strpos(lower(${d}), ${qp}) > 0, false)`);
   }
-  return { sql: parts.length ? `(${parts.join(" OR ")})` : "FALSE", params: p.values };
+  if (parts.length === 0) {
+    p.rollback(start);
+    return { sql: "FALSE", params: p.values };
+  }
+  return { sql: `(${parts.join(" OR ")})`, params: p.values };
 }

@@ -6,6 +6,7 @@ import {
   emptyExpr,
   FilterError,
   groupKeyFor,
+  groupValueKeyFor,
   kindOf,
   numExpr,
   SqlParams,
@@ -55,10 +56,8 @@ function aggregateSql(op: AggregateOp, f: SqlFieldInfo | null, a: string, p: Sql
       return { sql: `count(*) FILTER (WHERE NOT ${emptyExpr(f, a, p)})`, numeric: true };
     case "empty":
       return { sql: `count(*) FILTER (WHERE ${emptyExpr(f, a, p)})`, numeric: true };
-    case "unique": {
-      const g = groupKeyFor(f, a, p);
-      return { sql: `count(DISTINCT ${g.key})`, numeric: true };
-    }
+    case "unique":
+      return { sql: `count(DISTINCT ${groupValueKeyFor(f, a, p)})`, numeric: true };
     case "sum":
     case "avg":
       if (kind !== "number" && !(kind === "text" && f.type === "formula")) {

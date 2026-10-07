@@ -389,10 +389,10 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
   - Add an "Account" entry to the user menu.
 - **Tooling:** the cursor-ide-browser MCP could not keep a tab open, so UI checks used headless Edge via `playwright-core`.
 
-### 2026-10-07 ? C: grid, cells, field UI, record drawer, field manager
+### 2026-10-07 — C: grid, cells, field UI, record drawer, field manager
 - **Record and field clients** (`lib/api-areas/records.ts`, `fields.ts`) go through `request()`, so every write carries the client op id and Idempotency-Key. After G's idempotency fix, query, create, a replayed create and attachment presign all return full bodies; there is no client opt-out any more. New: `recordsApi.aggregate(baseId, tableId, {filter?, search?, aggregates:[{op, fieldId?}]})` ? `{count, "<op>:<fieldId>": value}` (wraps `POST ?/records/group` without `groupBy`).
 - **Grid summary bar:** while not every page is loaded, the summary uses `recordsApi.aggregate` (query key `["records", b, t, "summary", viewId, filter, search, ops]`, so the normal `["records", b, t]` invalidation refreshes it). Otherwise it is computed on the client. If the server rejects an op, the query retries without `unique` ops, and those cells show the client value with a trailing "+".
-- **`RecordDrawer`** accepts optional `hiddenFieldIds?: string[]` (shown under a "hidden fields" toggle) and `canEdit?: boolean` (default true), in addition to the �8 props.
+- **`RecordDrawer`** accepts optional `hiddenFieldIds?: string[]` (shown under a "hidden fields" toggle) and `canEdit?: boolean` (default true), in addition to the §8 props.
 - **`FieldManager({baseId, table, onClose, viewId?, hiddenFieldIds?, onHiddenChange?})`:** pass `viewId` and the panel shows per-field "Visible" toggles that save the view's `hiddenFieldIds` itself. The controlled `hiddenFieldIds`/`onHiddenChange` pair still works. Without either, no toggles are shown.
 - **`@tabula/field-ui`:**
   - `FieldUiServices.portal?(node): ReactNode`. When given, popovers and the link-record picker render through it. The web services pass `createPortal(node, document.body)`, so popups aren't clipped by grid or dialog overflow.
@@ -413,3 +413,10 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
 - The search indexer (`collab/record-index.ts`) titles records with the primary field’s display text (A’s `loadRecordNames`), falling back to `Record N` when it’s empty. It handles single and batch record events, table reindexes on primary-field changes (`table.updated {primaryFieldId}`, and `field.updated`/`field.type_changed` on the primary or when the primary is computed), undo/redo and trash restore. Touched linked tables with a computed primary are reindexed when they have 5,000 records or fewer.
 - `GET /v1/search` record titles use the same display text, and records also match on their indexed title, so formula, number, select and link primaries are searchable.
 - New: `POST /v1/bases/:b/search/reindex` (needs `base.manage_schema`) returns `{tables, records}` after rebuilding the base’s record index.
+
+### 2026-10-07 - A (follow-up 2): group query 500 "could not determine data type of parameter $n"
+- Cause: `unique` aggregates on single/multi select, link, and lookup-of-select/link fields. The SQL builder created a sort key, added its parameters, then discarded the SQL, and Postgres rejects parameters it never sees. Fixed, and no group-query combination returns 5xx any more.
+- `@tabula/filter` additions:
+  - `groupValueKeyFor(f, a, p)` returns the group key only. Use it when you don't need the sort key. `groupKeyFor` still returns `{key, sort}`.
+  - `SqlParams.mark()` / `rollback(mark)` drop parameters whose SQL you throw away.
+- Rule for anyone building SQL with `SqlParams`: every parameter you add must appear in the final SQL. Either use the expression or roll it back. The filter unit tests check this for every field kind.
