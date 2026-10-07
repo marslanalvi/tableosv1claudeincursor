@@ -1,5 +1,6 @@
 import type { Database } from "@tabula/db";
 import { sql, type Transaction } from "kysely";
+import { normalizeFieldType } from "@tabula/filter";
 
 type DbTrx = Transaction<Database>;
 
@@ -17,25 +18,28 @@ export interface SidecarTableMeta {
   base_id: string;
 }
 
-function sidecarKind(type: string): "text" | "num" | "time" | null {
-  switch (type) {
+/** Sidecar index kind per canonical (snake_case) field type; legacy camelCase names are normalized. */
+function sidecarKind(rawType: string): "text" | "num" | "time" | null {
+  switch (normalizeFieldType(rawType)) {
     case "number":
     case "currency":
     case "percent":
     case "rating":
-    case "date":
+    case "duration":
+    case "autonumber":
     case "checkbox":
       return "num";
-    case "dateTime":
-    case "createdTime":
-    case "lastModifiedTime":
+    case "date":
+    case "datetime":
+    case "created_time":
+    case "modified_time":
       return "time";
-    case "singleLineText":
-    case "longText":
+    case "text":
+    case "long_text":
     case "email":
     case "url":
     case "phone":
-    case "singleSelect":
+    case "single_select":
       return "text";
     default:
       return null;
@@ -65,6 +69,7 @@ function numProjection(value: unknown): { value_eq: number | null; sort_key: num
   if (typeof value === "number" && Number.isFinite(value)) {
     return { value_eq: value, sort_key: value };
   }
+  if (typeof value === "boolean") return { value_eq: value ? 1 : 0, sort_key: value ? 1 : 0 };
   const n = Number(value);
   if (!Number.isFinite(n)) return { value_eq: null, sort_key: null };
   return { value_eq: n, sort_key: n };

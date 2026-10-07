@@ -7,6 +7,7 @@
  * Requires a running API (TABULA_API_URL, default http://localhost:3200) and
  * DATABASE_URL (default the dev `tabula_cc` database).
  */
+// @ts-ignore -- no @types/pg in this workspace; test-only helper
 import pg from "pg";
 import { generateUuidV7 } from "@tabula/types";
 import { decodePublicId, encodePublicId } from "@tabula/types";
@@ -63,7 +64,7 @@ export interface FieldSpec {
 
 export interface Fixture {
   api: Api;
-  pool: pg.Pool;
+  pool: any;
   baseId: string; // bas_
   tableId: string; // tbl_
   peerTableId: string; // tbl_

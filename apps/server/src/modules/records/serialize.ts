@@ -434,6 +434,18 @@ export async function serializeRecords(
   }
 
   const users = await loadUsers(db, [...userIds]);
+  // Lookup of a link field: stored values are raw rec uuids -> {id, name}.
+  const lookupNames = new Map<string, string>();
+  for (const f of fields) {
+    const tt = f.type === "lookup" ? lookupTargets.get(f.id) : undefined;
+    if (!tt?.startsWith("link:")) continue;
+    const ids = rows.flatMap((row) =>
+      flatDeep(unwrapComputed(((row.computed ?? {}) as Record<string, unknown>)[String(f.slot)]).value)
+        .map((x) => idFromStored(x, "rec"))
+        .filter((x): x is string => !!x),
+    );
+    for (const [k, v] of await loadRecordNames(db, tt.slice(5), ids)) lookupNames.set(k, v);
+  }
   const atts = await loadAttachments(db, [...attIds], opts.storage ?? null);
 
   /* ---- link names ---- */
@@ -515,6 +527,11 @@ export async function serializeRecords(
                 value = arr.map((x) => users.get(idFromStored(x, "usr") ?? "")).filter((x) => !!x);
               } else if (tt === "attachment") {
                 value = arr.map((x) => atts.get(idFromStored(x, "att") ?? "")).filter((x) => !!x);
+              } else if (tt?.startsWith("link:")) {
+                value = arr
+                  .map((x) => idFromStored(x, "rec"))
+                  .filter((x): x is string => !!x && lookupNames.has(x))
+                  .map((x): LinkWire => ({ id: pid("rec", x), name: lookupNames.get(x) ?? "" }));
               } else {
                 value = arr;
               }
@@ -625,9 +642,23 @@ async function loadLookupTargetTypes(db: Db, fields: SerializeFieldRow[]): Promi
     SELECT id, type FROM data.fields WHERE id = ANY(${[...new Set(want.values())]}::uuid[])
   `.execute(db);
   const types = new Map(r.rows.map((x) => [x.id, x.type]));
+  const linkTargets = r.rows.filter((x) => x.type === "link" || x.type === "contact").map((x) => x.id);
+  const peerOf = new Map<string, string>();
+  if (linkTargets.length) {
+    const rel = await sql<{ a_field_id: string; b_field_id: string | null; a_table_id: string; b_table_id: string }>`
+      SELECT a_field_id, b_field_id, a_table_id, b_table_id FROM data.link_relations
+      WHERE a_field_id = ANY(${linkTargets}::uuid[]) OR b_field_id = ANY(${linkTargets}::uuid[])
+    `.execute(db);
+    for (const x of rel.rows) {
+      peerOf.set(x.a_field_id, x.b_table_id);
+      if (x.b_field_id) peerOf.set(x.b_field_id, x.a_table_id);
+    }
+  }
   for (const [lf, target] of want) {
     const t = types.get(target);
-    if (t) out.set(lf, t);
+    if (!t) continue;
+    const peer = peerOf.get(target);
+    out.set(lf, peer ? `link:${peer}` : t);
   }
   return out;
 }
