@@ -389,6 +389,18 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
   - Add an "Account" entry to the user menu.
 - **Tooling:** the cursor-ide-browser MCP could not keep a tab open, so UI checks used headless Edge via `playwright-core`.
 
+### 2026-10-07 ? C: grid, cells, field UI, record drawer, field manager
+- **Record and field clients** (`lib/api-areas/records.ts`, `fields.ts`) go through `request()`, so every write carries the client op id and Idempotency-Key. After G's idempotency fix, query, create, a replayed create and attachment presign all return full bodies; there is no client opt-out any more. New: `recordsApi.aggregate(baseId, tableId, {filter?, search?, aggregates:[{op, fieldId?}]})` ? `{count, "<op>:<fieldId>": value}` (wraps `POST ?/records/group` without `groupBy`).
+- **Grid summary bar:** while not every page is loaded, the summary uses `recordsApi.aggregate` (query key `["records", b, t, "summary", viewId, filter, search, ops]`, so the normal `["records", b, t]` invalidation refreshes it). Otherwise it is computed on the client. If the server rejects an op, the query retries without `unique` ops, and those cells show the client value with a trailing "+".
+- **`RecordDrawer`** accepts optional `hiddenFieldIds?: string[]` (shown under a "hidden fields" toggle) and `canEdit?: boolean` (default true), in addition to the �8 props.
+- **`FieldManager({baseId, table, onClose, viewId?, hiddenFieldIds?, onHiddenChange?})`:** pass `viewId` and the panel shows per-field "Visible" toggles that save the view's `hiddenFieldIds` itself. The controlled `hiddenFieldIds`/`onHiddenChange` pair still works. Without either, no toggles are shown.
+- **`@tabula/field-ui`:**
+  - `FieldUiServices.portal?(node): ReactNode`. When given, popovers and the link-record picker render through it. The web services pass `createPortal(node, document.body)`, so popups aren't clipped by grid or dialog overflow.
+  - z-index: `.tfu-pop` 1150, `.tfu-modal-back` 1140, above dialogs at 1100.
+  - The cell-mode date/datetime editor is a text input. It accepts typed dates (`12/25/2026`, `2026-12-25`, `Dec 25`, `today`, `tomorrow`, `2026-11-05 09:30`), plus a calendar button that opens the native picker. Form mode keeps the native inputs.
+  - Editors commit on unmount in a StrictMode-safe way.
+  - Email/URL/phone editors use `type="text"` with `inputMode`.
+
 ### 2026-10-07 - D (follow-up): view edit rights, unload saves, load errors
 - **`canEdit` now follows the base role.** For collaborative and locked views it is `false` unless the user has `view.update` (editor or higher). Locked views also still need the view's creator or a base creator. Personal views stay owner-only, whatever the role. `views/serialize.ts` exports `viewEditRights(snapshot)`, which returns `{isBaseCreator, canUpdateShared}`; `serializeView` and `canEditView` take it (a plain boolean still means "is base creator"). This answers G's note above. The web toolbar, sidebar and per-type settings are already read-only when `canEdit` is false. **C:** GridView should also skip view config PATCHes (column widths, frozen columns) when `view.canEdit` is false, or viewers will get 403s.
 - D's earlier report that `records/query` returns an empty body with an `Idempotency-Key` is fixed (G). D's views still send record queries without that header (`postRead`); that is harmless.
@@ -396,3 +408,8 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
 - `ViewsSidebar`'s `onCreateView` may return a Promise; if it rejects, the error is shown in the sidebar's create prompt. `base.tsx` passes `createViewMutation.mutateAsync(...)`.
 - View record queries (`useViewRecords`) retry 5xx and network errors up to 5 times with backoff (1 s up to 8 s). Kanban, calendar, gallery, timeline and list show a "Couldn't load records." banner with a Retry button (`features/views/RecordsStatus.tsx`) instead of loading forever.
 - `FormsIndex` adds a newly created form view to the `["bases", b]` and `["views", b, t]` caches before calling `onOpenForm`, so the Data tab opens on the new form.
+
+### 2026-10-07 — E (follow-up): search index titles
+- The search indexer (`collab/record-index.ts`) titles records with the primary field’s display text (A’s `loadRecordNames`), falling back to `Record N` when it’s empty. It handles single and batch record events, table reindexes on primary-field changes (`table.updated {primaryFieldId}`, and `field.updated`/`field.type_changed` on the primary or when the primary is computed), undo/redo and trash restore. Touched linked tables with a computed primary are reindexed when they have 5,000 records or fewer.
+- `GET /v1/search` record titles use the same display text, and records also match on their indexed title, so formula, number, select and link primaries are searchable.
+- New: `POST /v1/bases/:b/search/reindex` (needs `base.manage_schema`) returns `{tables, records}` after rebuilding the base’s record index.

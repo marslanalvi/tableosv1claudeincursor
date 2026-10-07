@@ -5,6 +5,9 @@ import { parsePid, pid } from "../../lib/public-ids.js";
 import { notFound } from "../../http/errors.js";
 import { handleWave4Error } from "../wave4/problems.js";
 import { compileForUser } from "../access/compile.js";
+import { assertCan } from "../access/assert.js";
+import { reindexBaseRecords } from "../collab/record-index.js";
+import { loadRecordNames } from "../records/serialize.js";
 
 const TEXT_TYPES = ["text", "long_text", "email", "url", "phone"];
 
@@ -31,8 +34,9 @@ function snippet(text: string, q: string): string {
 }
 
 /**
- * Global search (Cmd/Ctrl+K). Queries live data directly (base/table names and
- * text cells), so results never depend on the async search index being current.
+ * Global search (Cmd/Ctrl+K). Text cells are matched live, so fresh edits are
+ * found before the async index catches up; the index adds matches on the
+ * primary field's display text (formulas, numbers, selects, links…).
  */
 export async function registerSearchRoutes(
   app: FastifyInstance,
@@ -135,18 +139,28 @@ export async function registerSearchRoutes(
           FROM data.records r
           JOIN data.tables t ON t.id = r.table_id AND t.deleted_at IS NULL
           LEFT JOIN data.fields pf ON pf.id = t.primary_field_id
+          LEFT JOIN data.search_documents sd
+            ON sd.base_id = r.base_id AND sd.doc_type = 'record' AND sd.ref_id = r.id
           WHERE r.base_id = ANY(${baseIds}::uuid[]) AND r.deleted_at IS NULL
-            AND EXISTS (
-              SELECT 1 FROM data.fields f
-              WHERE f.table_id = r.table_id AND f.deleted_at IS NULL
-                AND f.type = ANY(${TEXT_TYPES}::text[])
-                AND r.cells ->> f.slot::text ILIKE ${pattern}
+            AND (
+              EXISTS (
+                SELECT 1 FROM data.fields f
+                WHERE f.table_id = r.table_id AND f.deleted_at IS NULL
+                  AND f.type = ANY(${TEXT_TYPES}::text[])
+                  AND r.cells ->> f.slot::text ILIKE ${pattern}
+              )
+              OR sd.title ILIKE ${pattern}
             )
-          ORDER BY (COALESCE(r.cells ->> pf.slot::text, '') ILIKE ${pattern}) DESC, r.updated_at DESC
+          ORDER BY (COALESCE(sd.title, r.cells ->> pf.slot::text, '') ILIKE ${pattern}) DESC, r.updated_at DESC
           LIMIT ${limit}
         `.execute(ctx.db);
+        const names = new Map<string, string>();
+        for (const t of new Set(records.rows.map((r) => r.table_id))) {
+          const ids = records.rows.filter((r) => r.table_id === t).map((r) => r.id);
+          for (const [id, name] of await loadRecordNames(ctx.db, t, ids)) names.set(id, name);
+        }
         for (const r of records.rows) {
-          const title = r.primary_text?.trim() || `Record ${r.row_number}`;
+          const title = names.get(r.id)?.trim() || `Record ${r.row_number}`;
           const match = r.match_text ?? "";
           results.push({
             kind: "record",
@@ -180,4 +194,21 @@ export async function registerSearchRoutes(
       }
     },
   );
+
+  // Rebuild a base's record index (backfill after indexer changes).
+  app.post<{ Params: { baseId: string } }>("/v1/bases/:baseId/search/reindex", async (request, reply) => {
+    try {
+      const user = request.user;
+      if (!user) {
+        notFound(request, reply);
+        return;
+      }
+      const baseId = parsePid(request.params.baseId, "bas");
+      assertCan(await compileForUser(ctx.db, user.id, baseId), "base.manage_schema");
+      const res = await reindexBaseRecords(ctx.db, ctx.search, baseId);
+      void reply.send(res);
+    } catch (err) {
+      handleWave4Error(request, reply, err);
+    }
+  });
 }
