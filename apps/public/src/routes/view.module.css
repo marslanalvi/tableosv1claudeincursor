@@ -1,0 +1,374 @@
+.wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 56px);
+}
+
+.tableTabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 20px 0;
+  border-bottom: 1px solid var(--p-hairline);
+  background: var(--p-surface-soft);
+  overflow-x: auto;
+}
+
+.tab,
+.tabActive {
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px 8px 0 0;
+  font-weight: 500;
+  color: var(--p-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tabActive {
+  background: var(--p-canvas);
+  border-color: var(--p-hairline);
+  color: var(--p-ink);
+  margin-bottom: -1px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--p-hairline);
+  flex-wrap: wrap;
+}
+
+.titleBlock {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--p-ink);
+}
+
+.description {
+  margin: 4px 0 0;
+  color: var(--p-muted);
+  max-width: 640px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--p-hairline);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-canvas);
+}
+
+.sortChip {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--p-radius-sm);
+  border: 1px solid #f3d7b7;
+  background: #fdf0e2;
+  color: #7a3d00;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  width: 240px;
+  padding: 0 10px;
+  border: 1px solid var(--p-hairline);
+  border-radius: var(--p-radius-sm);
+  color: var(--p-muted);
+  background: var(--p-canvas);
+}
+
+.search:focus-within {
+  border-color: var(--p-focus);
+  box-shadow: 0 0 0 1px var(--p-focus);
+}
+
+.search input {
+  border: 0;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: var(--p-ink);
+}
+
+.gridScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--p-surface-soft);
+}
+
+.grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  background: var(--p-canvas);
+  font-size: 13px;
+}
+
+.noCopy {
+  user-select: none;
+}
+
+.grid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 34px;
+  padding: 0;
+  background: #f5f6f8;
+  border-bottom: 1px solid var(--p-hairline);
+  border-right: 1px solid var(--p-hairline-soft);
+  text-align: left;
+  font-weight: 500;
+  color: var(--p-ink);
+}
+
+.headBtn {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 500;
+}
+
+.headName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typeIcon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  color: var(--p-muted);
+  font-size: 12px;
+}
+
+.grid td {
+  height: var(--row-h, 34px);
+  padding: 0;
+  border-bottom: 1px solid var(--p-hairline-soft);
+  border-right: 1px solid var(--p-hairline-soft);
+  vertical-align: top;
+  background: var(--p-canvas);
+}
+
+.grid tbody tr {
+  cursor: pointer;
+}
+
+.grid tbody tr:active td,
+.rowActive td {
+  background: #f0f5ff;
+}
+
+.cell {
+  height: var(--row-h, 34px);
+  padding: 7px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--p-ink);
+}
+
+.rowNumHead,
+.rowNum {
+  text-align: center;
+}
+
+.rowNum {
+  color: var(--p-muted);
+  font-size: 12px;
+  padding-top: 9px !important;
+}
+
+.frozen {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.grid th.frozen {
+  z-index: 3;
+}
+
+.frozenPrimary {
+  position: sticky;
+  left: 56px;
+  z-index: 1;
+  border-right: 1px solid var(--p-hairline) !important;
+}
+
+.grid th.frozenPrimary {
+  z-index: 3;
+}
+
+.gridState {
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--p-muted);
+}
+
+.sentinel {
+  height: 1px;
+}
+
+.footer {
+  flex: none;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  border-top: 1px solid var(--p-hairline);
+  font-size: 12px;
+  color: var(--p-muted);
+  background: var(--p-canvas);
+}
+
+/* ── Record panel ── */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(24, 29, 38, 0.28);
+  z-index: 20;
+}
+
+.panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 100vw);
+  background: var(--p-canvas);
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 32px rgba(24, 29, 38, 0.12);
+  animation: slideIn 0.16s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--p-hairline);
+}
+
+.panelNav {
+  display: flex;
+  gap: 4px;
+}
+
+.panelTitle {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--p-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid var(--p-hairline);
+  background: var(--p-canvas);
+  cursor: pointer;
+  color: var(--p-ink);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.panelBody {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 40px;
+}
+
+.detailField {
+  margin-bottom: 20px;
+}
+
+.detailLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--p-muted);
+  margin-bottom: 6px;
+  text-transform: none;
+}
+
+.detailHelp {
+  margin: -2px 0 6px;
+  font-size: 12px;
+  color: var(--p-muted);
+}
+
+.detailValue {
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--p-hairline-soft);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-surface-soft);
+  color: var(--p-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.emptyValue {
+  color: var(--p-border-strong);
+}
+
+@media (max-width: 720px) {
+  .search {
+    width: 100%;
+  }
+}

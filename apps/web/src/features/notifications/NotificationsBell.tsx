@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { notificationsApi, relativeTime, type NotificationWire } from "../../lib/api-areas/collab.ts";
+import { navigateToLink } from "../search/SearchPalette.tsx";
 import styles from "./notifications.module.css";
 
 const POLL_MS = 30_000;
@@ -73,7 +74,7 @@ export function NotificationsBell() {
   function openItem(n: NotificationWire) {
     if (!n.readAt) markRead.mutate(n.id);
     setOpen(false);
-    if (n.link) void router.navigate({ href: n.link });
+    if (n.link) void navigateToLink(router, n.link);
   }
 
   return (

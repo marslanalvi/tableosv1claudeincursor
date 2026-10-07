@@ -222,7 +222,7 @@ export async function registerCommentsRoutes(
           const title = await recordTitle(ctx.db, tableId, recordId);
           const actorName = user.displayName || user.email;
           const text = plainTextBody(body.body);
-          const link = recordLink(baseId, tableId, recordId, { commentId: pid("cmt", commentId) });
+          const link = recordLink(baseId, tableId, recordId, { comment: pid("cmt", commentId) });
           const notified = new Set<string>([user.id]);
           const items: NewNotification[] = [];
           const add = (userId: string, category: NewNotification["category"], t: string) => {

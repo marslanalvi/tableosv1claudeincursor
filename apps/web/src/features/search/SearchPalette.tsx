@@ -32,6 +32,16 @@ function Highlight({ text, q }: { text: string; q: string }) {
 }
 
 /** Cmd/Ctrl+K palette: bases, tables and records across the user's workspaces. */
+/**
+ * Navigate to an in-app link such as `/bases/bas_…?table=tbl_…&record=rec_…`.
+ * The record drawer reads `?record=` on mount and on popstate, so a popstate is
+ * dispatched for links into the base that is already open.
+ */
+export async function navigateToLink(router: { navigate: (opts: { href: string }) => Promise<void> }, href: string) {
+  await router.navigate({ href });
+  window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+}
+
 export function SearchPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -63,7 +73,7 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
 
   function go(r: SearchResult) {
     onClose();
-    void router.navigate({ href: r.href });
+    void navigateToLink(router, r.href);
   }
 
   const grouped: { kind: SearchResult["kind"]; items: { r: SearchResult; index: number }[] }[] = [];

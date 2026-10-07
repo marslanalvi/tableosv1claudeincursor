@@ -83,6 +83,11 @@ function localDownloadUrl(ctx: AppContext, attId: string, filename: string): str
   return `/v1/public/files/${token}/${encodeURIComponent(sanitizeFilename(filename))}`;
 }
 
+/** Signed URL for a local-driver attachment (null before routes are registered). */
+export function localAttachmentUrl(attId: string, filename: string): string | null {
+  return runtimeCtx ? localDownloadUrl(runtimeCtx, attId, filename) : null;
+}
+
 export async function downloadUrlFor(
   ctx: AppContext,
   row: Pick<AttachmentRow, "id" | "filename" | "object_key" | "storage_driver">,

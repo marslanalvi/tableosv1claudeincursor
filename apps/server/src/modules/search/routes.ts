@@ -4,6 +4,7 @@ import type { AppContext } from "../../lib/app-context.js";
 import { parsePid, pid } from "../../lib/public-ids.js";
 import { notFound } from "../../http/errors.js";
 import { handleWave4Error } from "../wave4/problems.js";
+import { compileForUser } from "../access/compile.js";
 
 const TEXT_TYPES = ["text", "long_text", "email", "url", "phone"];
 
@@ -57,7 +58,7 @@ export async function registerSearchRoutes(
           : null;
         const baseFilter = request.query.baseId ? parsePid(request.query.baseId, "bas") : null;
 
-        const accessible = await sql<{ base_id: string; name: string; kind: string | null }>`
+        const candidates = await sql<{ base_id: string; name: string; kind: string | null }>`
           SELECT DISTINCT bd.base_id, bd.name, bd.kind
           FROM core.base_directory bd
           INNER JOIN core.organization_members m
@@ -66,6 +67,10 @@ export async function registerSearchRoutes(
             ${workspaceFilter ? sql`AND bd.workspace_id = ${workspaceFilter}` : sql``}
             ${baseFilter ? sql`AND bd.base_id = ${baseFilter}` : sql``}
         `.execute(ctx.db);
+        const accessible = { rows: [] as typeof candidates.rows };
+        for (const r of candidates.rows) {
+          if ((await compileForUser(ctx.db, user.id, r.base_id)).effectiveBaseRole) accessible.rows.push(r);
+        }
         const baseIds = accessible.rows.map((r) => r.base_id);
         const baseName = new Map(accessible.rows.map((r) => [r.base_id, r.name]));
         if (baseIds.length === 0) {
@@ -105,7 +110,7 @@ export async function registerSearchRoutes(
             baseId: pid("bas", t.base_id),
             tableId: pid("tbl", t.id),
             recordId: null,
-            href: `/bases/${pid("bas", t.base_id)}?tableId=${pid("tbl", t.id)}`,
+            href: `/bases/${pid("bas", t.base_id)}?table=${pid("tbl", t.id)}`,
           });
         }
 
@@ -154,7 +159,7 @@ export async function registerSearchRoutes(
             baseId: pid("bas", r.base_id),
             tableId: pid("tbl", r.table_id),
             recordId: pid("rec", r.id),
-            href: `/bases/${pid("bas", r.base_id)}?tableId=${pid("tbl", r.table_id)}&recordId=${pid("rec", r.id)}`,
+            href: `/bases/${pid("bas", r.base_id)}?table=${pid("tbl", r.table_id)}&record=${pid("rec", r.id)}`,
           });
         }
 

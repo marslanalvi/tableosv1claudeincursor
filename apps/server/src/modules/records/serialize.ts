@@ -15,6 +15,7 @@ import type { Database } from "@tabula/db";
 import type { TabulaStorage } from "@tabula/storage";
 import { parseIsoInstant } from "@tabula/filter";
 import { parsePid, pid } from "../../lib/public-ids.js";
+import { localAttachmentUrl } from "../attachments/service.js";
 
 type Db = Kysely<Database>;
 
@@ -694,7 +695,9 @@ async function loadAttachments(
     r.rows.map(async (a) => {
       const apiPath = `/v1/bases/${pid("bas", a.base_id)}/attachments/${pid("att", a.id)}`;
       let url = apiPath;
-      if (storage && a.scan_status !== "rejected" && Date.now() > signerDownUntil) {
+      if (a.j["storage_driver"] === "local") {
+        url = localAttachmentUrl(a.id, a.filename) ?? `${apiPath}/content`;
+      } else if (storage && a.scan_status !== "rejected" && Date.now() > signerDownUntil) {
         try {
           url = await Promise.race([
             storage.presignDownload(a.object_key).then((d) => d.url),

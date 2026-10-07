@@ -34,8 +34,8 @@ export async function createNotifications(db: TabulaDb, items: NewNotification[]
 /** In-app link to a record (web route `/bases/$baseId` honours these search params). */
 export function recordLink(baseId: string, tableId: string, recordId: string, extra?: Record<string, string>): string {
   const params = new URLSearchParams({
-    tableId: pid("tbl", tableId),
-    recordId: pid("rec", recordId),
+    table: pid("tbl", tableId),
+    record: pid("rec", recordId),
     ...(extra ?? {}),
   });
   return `/bases/${pid("bas", baseId)}?${params.toString()}`;

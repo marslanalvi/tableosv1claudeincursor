@@ -25,7 +25,8 @@ async function download(url: string): Promise<void> {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(href);
+  // Revoking synchronously can cancel the download before the browser reads the blob.
+  setTimeout(() => URL.revokeObjectURL(href), 30_000);
 }
 
 /**

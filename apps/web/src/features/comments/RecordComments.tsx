@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiProblemError } from "../../lib/api.ts";
 import {
   commentsApi,
@@ -105,6 +105,7 @@ function Composer({
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [active, setActive] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const pendingCaret = useRef<number | null>(null);
 
   const collaborators = useQuery({
     queryKey: ["collaborators", baseId],
@@ -137,14 +138,18 @@ function Composer({
     const insert = `@${c.name} `;
     const next = text.slice(0, mention.start) + insert + text.slice(caret);
     mentioned.current.set(c.name, c.id);
+    pendingCaret.current = mention.start + insert.length;
     setText(next);
     setMention(null);
-    requestAnimationFrame(() => {
-      const pos = mention.start + insert.length;
-      ta.current?.focus();
-      ta.current?.setSelectionRange(pos, pos);
-    });
   }
+
+  useLayoutEffect(() => {
+    const pos = pendingCaret.current;
+    if (pos === null || !ta.current) return;
+    pendingCaret.current = null;
+    ta.current.focus();
+    ta.current.setSelectionRange(pos, pos);
+  }, [text]);
 
   async function submit() {
     const body = text.trim();
@@ -386,7 +391,10 @@ export function RecordComments({
                       type="button"
                       role="menuitem"
                       className={styles.pickerBtn}
-                      onClick={() => react.mutate({ id: c.id, emoji: e })}
+                      onClick={() => {
+                        react.mutate({ id: c.id, emoji: e });
+                        setPickerFor(null);
+                      }}
                     >
                       {e}
                     </button>

@@ -25,7 +25,7 @@ function legacyLink(baseId: string | null, body: unknown): string | null {
   if (!rec || !tbl) return `/bases/${pid("bas", baseId)}`;
   const recPid = rec.startsWith("rec_") ? rec : pid("rec", rec);
   const tblPid = tbl.startsWith("tbl_") ? tbl : pid("tbl", tbl);
-  return `/bases/${pid("bas", baseId)}?tableId=${tblPid}&recordId=${recPid}`;
+  return `/bases/${pid("bas", baseId)}?table=${tblPid}&record=${recPid}`;
 }
 
 export async function registerNotificationsRoutes(

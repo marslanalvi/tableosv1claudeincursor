@@ -306,9 +306,9 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
   - **G**: a newly created automation also fires for `record.created` events written before the automation existed. Its runs then fail with "The triggering record no longer exists" when those records are gone.
   - **E**: the search indexer stores record titles as "Record N", not the primary field value.
 
-### 2026-10-07 � A (follow-up): lookups filter, search, sort and group by display text
+### 2026-10-07 — A (follow-up): lookups filter, search, sort and group by display text
 - Closes B's "open gaps" note above. `SqlFieldInfo` has an optional `lookupTarget: SqlFieldInfo | null` (the looked-up field, with `link` info when it is a link field). The server's `loadSqlFieldInfos` resolves it from `config.targetFieldId` (raw uuid or `fld_`; legacy `lookupFieldId` accepted), so every caller of `executeRecordQuery` / the group query gets it.
-- Each stored lookup element maps to the text the serializer shows. Select option id ? option label (unknown ids stay as the raw id). User uuid ? `display_name`, falling back to email. Record uuid ? the linked record's primary display (live records only). Attachment uuid ? filename. Other targets keep their stored text.
+- Each stored lookup element maps to the text the serializer shows. Select option id → option label (unknown ids stay as the raw id). User uuid → `display_name`, falling back to email. Record uuid → the linked record's primary display (live records only). Attachment uuid → filename. Other targets keep their stored text.
 - **Filters and search:** text ops (`contains`, `notContains`, `eq`, `neq`) and search on a lookup compare the elements' display texts joined with `", "`. Stored ids never match.
 - **Empty checks:** `empty`/`notEmpty` on a lookup of a collaborator, attachment or link ignore dangling ids (user, attachment or record no longer exists), matching the serialized value that drops them.
 - **Sort:** a lookup sorts by its first element. Number targets sort numerically, select targets by option order, all others by lower-cased display text of the first non-empty element. Empties go last.
@@ -317,3 +317,74 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
 - **`evaluateFilter`:** `EvalField` has an optional `lookupTarget: {id, type, config}`. When it's given and the target is a single/multi select, wire `opt_` ids map to labels for text ops. Collaborator/attachment/link lookup values are already hydrated objects on the wire, so their `name`/`filename` is used either way. New export: `lookupTextOf(field, value)`.
 - **For G:** `apps/server/src/modules/automations/filter-eval.ts` builds `EvalField`s without `lookupTarget`, so automation conditions on a lookup of a select still compare option ids. To fix, pass `lookupTarget: {id, type, config}` of the target field.
 - Plain collaborator sort orders by user name (verified with two named users, asc and desc).
+
+### 2026-10-07 — E: sharing, attachments, import/export, search, notifications, contacts, comments
+- **Deep links** (search hrefs, notification `link`, comment notifications): `/bases/bas_??table=tbl_?&record=rec_?[&comment=cmt_?]`. The old `?tableId=&recordId=` shape is gone. F's `routes/base.tsx` reads `?table=` and switches the active table, resetting the view and the tab to data. D's grid opens `?record=`. Client-side navigation to these links uses `navigateToLink(router, href)` from `features/search/SearchPalette.tsx`, which navigates and then dispatches `popstate` so a grid that's already mounted picks up the new `?record=`.
+- **Shares** (`modules/share`). Authenticated routes:
+  - `GET/POST /v1/bases/:b/shares`
+  - `PATCH/DELETE /v1/bases/:b/shares/:shareId`
+  - `POST ?/:shareId/regenerate`: the old token then returns 404.
+
+  Tokens are `shr_<prefix>.<secret>`. `share.url` points at the public app: `/s/<token>` for view and base shares, `/f/<token>` for form shares.
+
+  Public routes, all under `/v1/public/shares/:token`:
+  - `GET` (metadata, hidden fields stripped)
+  - `POST /records/query` (the view filter is always applied)
+  - `GET /records/:recordId`
+  - `POST /submit` (form shares only)
+  - `POST /attachments/presign`, `PUT /attachments/:id/upload`, `POST /attachments/complete`
+
+  Password shares answer 401 until `POST ?/unlock {password}` returns `{unlockToken}`, which is then sent as the `X-Share-Unlock` header. A revoked, expired or deleted target returns 410 with `meta.reason` set to `revoked`, `expired` or `target_deleted`. Form submit validation errors are 422 with per-field `fieldErrors`.
+- **Attachments** (`modules/attachments`):
+  - Upload flow: `POST /v1/bases/:b/attachments/presign`, then `PUT` to the returned URL (on the local driver that is `?/attachments/:id/upload`), then `POST ?/attachments/complete`. Complete sniffs the real mime type and image dimensions; oversize uploads are rejected.
+  - Other routes: `GET ?/attachments/:id` (metadata), `GET ?/attachments/:id/content` (auth-checked bytes), and `POST /v1/bases/:b/tables/:t/records/:r/attachments` to attach to a record.
+  - Web helper: `uploadAttachment` in `apps/web/src/lib/api-areas/files.ts`.
+  - **For A:** `records/serialize.ts` `loadAttachments` now handles attachments with `storage_driver = "local"` by giving them a signed `/v1/public/files/<token>/<filename>` URL (via `localAttachmentUrl` in `attachments/service.ts`). Before this, local uploads were given a GCS URL or the JSON metadata path, and images didn't render. Keep this branch.
+- **Import:** `POST /v1/bases/:b/import {tableId, rows, importJobId?, rowOffset?, totalRows?, final?, typecast?}` returns `{importJobId, rowsImported, rowsFailed, errors:[{row, message}], totalImported, totalFailed, status}`. Rows go through B's write path (`wave4/record-writer.ts`). The web side (`features/import/parse.ts`) parses CSV and XLSX and sends the rows in chunks.
+- **Export:** `GET /v1/bases/:b/tables/:t/export?format=csv|xlsx&viewId=` uses the view's filter, sort and visible fields, and outputs computed values as display text. CSV starts with a BOM, uses CRLF line endings and guards against formula injection: cells starting with `= + - @`, tab or CR get a `'` prefix. Attachment cells list their file URLs.
+- **Search:** `GET /v1/search?q=&limit=&workspaceId=&baseId=` returns `{results:[{kind:"base"|"table"|"record", id, title, subtitle, href}]}`. Record titles come from the primary field's text read straight from `data.records`, so the "Record N" titles in F's search-indexer note don't affect it.
+- **Notifications:**
+  - `GET /v1/notifications?unreadOnly=true&limit=` returns `{notifications:[{id:"ntf_?", category, title, body, link, readAt, read, createdAt, workspaceId, baseId, actor:{id, name, email}|null}], unreadCount}`.
+  - `POST /v1/notifications/:id/read`, `POST /v1/notifications/:id/unread`, `POST /v1/notifications/read-all`.
+  - Notifications are created for mentions and for replies to your comment.
+- **Contacts:** `GET /v1/workspaces/:w/contacts?q=`, `POST /v1/workspaces/:w/contacts`, `PATCH/DELETE /v1/workspaces/:w/contacts/:id` and `POST /v1/workspaces/:w/contacts/merge {survivorContactId, mergedContactId}`. Merge fills the survivor's empty fields, moves links from the merged contact to the survivor, and rejects records that aren't contacts. The web page is `routes/contacts.tsx` (`?workspaceId=`).
+- **Comments:**
+  - `GET/POST /v1/bases/:b/tables/:t/records/:r/comments`
+  - `PATCH/DELETE /v1/bases/:b/comments/:id` (author only, otherwise 403)
+  - `POST /v1/bases/:b/comments/:id/reactions {emoji}` and `DELETE ?/reactions/:emoji`
+
+  Mention markup in `body` is `@[Display Name](usr_?)`. Viewers can read comments but get 403 when posting or reacting. The web component is `RecordComments` (`features/comments`).
+
+### 2026-10-07 — G: idempotency, automations, auth/account, permissions
+
+- **Idempotency (`apps/server/src/http/idempotency.ts`):**
+  - The `onSend` hook is synchronous and only captures the payload; the record is persisted in `onResponse`. First responses now carry their body. A handler that sends a reply from a hook must still `return reply`.
+  - Exempt (the key is ignored): read-only POSTs matching `/records/(query|group)$`, and anonymous requests (no `request.user`, e.g. public forms).
+  - Same key + same body returns the stored status and body verbatim, with the header `idempotent-replayed: true`. A stored 204 replays as an empty 204.
+  - Same key + different body returns `409 IDEMPOTENCY_CONFLICT`. A key still in progress also returns 409, unless its lock has expired.
+  - 5xx responses are not cached (the key is deleted).
+  - `request.idempotencyKey` and `request.idempotencyWorkspaceId` are gone (nothing used them).
+- **Automations:**
+  - The engine runs inside the worker (`entrypoints/worker.ts`) and reads `data.outbox_events` directly.
+  - Changed fields are computed by diffing `base_changes.ops` against `inverse_ops`.
+  - Migration `0015` adds `data.automations.enabled_at`. It is set when an automation is turned on, and events older than it never trigger the automation.
+  - Actions call the HTTP API with header `x-tabula-client-op-id: aut:<runId>`. Changes caused by a run never re-trigger that automation, and causation depth is capped at 8.
+  - **E:** form submissions are written as actor `system` with `via:"api"`. The consumer detects them through `data.share_submissions` and waits up to 5 s for that row. Passing `via:"form"` (and the form view id) into the submit mutation's change payload would remove the wait.
+- **Auth:**
+  - Per-IP limits are configurable via `AUTH_SIGNUP_MAX_PER_IP` and `AUTH_LOGIN_MAX_PER_IP`. Defaults are 30 and 50 in production, 2000 elsewhere, so dev test signups no longer hit 429.
+  - MFA login returns `{mfaRequired:true, mfaToken}`; the client then calls `POST /v1/auth/mfa/verify {mfaToken, code}`.
+  - Google sign-in links to an existing account only when `email_verified` is true.
+- **Permissions (phase 2):**
+  - `resolveBaseContext` and `resolveTableContext` now require a real base role from `compileForUser`. Org membership alone no longer grants access to a base, so every route using these helpers returns 404 for org members who have no workspace/base grant.
+  - `GET /v1/search` and `GET /v1/workspaces/:w/bases` only include bases where the user has a role.
+  - `view.create_collaborative` is now editor+ (commenters and viewers no longer have it).
+  - Views routes:
+    - Creating or duplicating a shared view needs `view.create_collaborative`; a personal view needs commenter+.
+    - Rename, config, delete and reorder of non-personal views need `view.update`; personal views stay owner-only.
+    - Favorites are open to anyone who can read the base.
+  - **D:** `serializeView`'s edit flag (from `canEditView`) still reports `true` for viewers on collaborative views. Viewers will now get 403 if the grid PATCHes shared view config (column widths and similar). Those changes should go to personal overrides, or the UI should hide the controls.
+- **Account UI (for F, who owns `router.tsx`):**
+  - Please register `/account` → `AccountPage` from `features/account/AccountPage.tsx` (optional `onBack`). It covers profile, password, TOTP MFA and sessions.
+  - Please register `/invite/$token` → `AcceptInvite` from `features/account/AcceptInvite.tsx`, with props `{token, onDone({baseId, workspaceId}), onSignIn}`. `onSignIn` should go to `/login?next=/invite/<token>`; `onDone` should navigate to the base (or home when `baseId` is null).
+  - Add an "Account" entry to the user menu.
+- **Tooling:** the cursor-ide-browser MCP could not keep a tab open, so UI checks used headless Edge via `playwright-core`.
