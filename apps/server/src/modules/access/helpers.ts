@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import type { TabulaDb } from "@tabula/db";
+import { compileForUser } from "./compile.js";
 
 /** Active org membership grants workspace-level access for MVP. */
 export async function userCanAccessWorkspace(
@@ -57,6 +58,11 @@ export async function resolveBaseContext(
 
   const row = result.rows[0];
   if (!row) {
+    return { ok: false };
+  }
+  // Org membership alone grants nothing: the user needs a workspace/base grant (or org owner/admin).
+  const snapshot = await compileForUser(db, userId, baseId);
+  if (!snapshot.effectiveBaseRole) {
     return { ok: false };
   }
   return {

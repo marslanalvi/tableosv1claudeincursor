@@ -45,6 +45,7 @@ export function AutomationsPanel({ baseId }: { baseId: string }) {
   const listQuery = useQuery({
     queryKey: ["automations", baseId],
     queryFn: () => automationsApi.list(baseId),
+    refetchInterval: 15_000,
   });
   const baseQuery = useQuery({
     queryKey: ["bases", baseId],

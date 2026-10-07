@@ -5,12 +5,12 @@ import { pid } from "../../lib/public-ids.js";
 import { forbidden, handleRouteError, notFound, unauthorized } from "../../http/errors.js";
 import { getOrgRole } from "../access/workspace-access.js";
 import { writeAuditEvent } from "../audit/write.js";
-
-/** Only org owners and billing admins may change the plan. */
-const BILLING_ROLES = new Set(["owner", "billing_admin"]);
 import { LimitsService } from "./limits-service.js";
 import { resolveBillingOrgId } from "./resolve-org.js";
 import { upgradeOrgToTeamPlan } from "./subscription.js";
+
+/** Only org owners and billing admins may change the plan. */
+const BILLING_ROLES = new Set(["owner", "billing_admin"]);
 
 const upgradeBody = z.object({
   organizationId: z.string().optional(),

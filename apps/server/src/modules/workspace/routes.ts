@@ -7,7 +7,7 @@ import { parsePid, pid } from "../../lib/public-ids.js";
 import { handleRouteError, notFound, validationProblem } from "../../http/errors.js";
 import { userCanAccessWorkspace } from "../access/helpers.js";
 import { assertCan } from "../access/assert.js";
-import { compileForWorkspace } from "../access/compile.js";
+import { compileForUser, compileForWorkspace } from "../access/compile.js";
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -258,9 +258,13 @@ export async function registerWorkspaceRoutes(
             AND deleted_at IS NULL
           ORDER BY order_key ASC, created_at ASC
         `.execute(ctx.db);
+        const visible: typeof result.rows = [];
+        for (const r of result.rows) {
+          if ((await compileForUser(ctx.db, user.id, r.base_id)).effectiveBaseRole) visible.push(r);
+        }
 
         void reply.send({
-          bases: result.rows.map((r) => ({
+          bases: visible.map((r) => ({
             id: pid("bas", r.base_id),
             name: r.name,
           })),

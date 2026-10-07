@@ -250,11 +250,12 @@ export async function registerAutomationsRoutes(
 
         await sql`
           INSERT INTO data.automations (
-            id, workspace_id, base_id, name, enabled, trigger, actions, created_by, updated_by, webhook_token
+            id, workspace_id, base_id, name, enabled, trigger, actions, created_by, updated_by, webhook_token,
+            enabled_at
           ) VALUES (
             ${id}, ${base.workspaceId}, ${base.baseId}, ${name}, ${body.enabled ?? false},
             ${JSON.stringify(trigger)}::jsonb, ${JSON.stringify(actions)}::jsonb, ${base.userId}, ${base.userId},
-            ${token}
+            ${token}, ${body.enabled ? new Date() : null}
           )
         `.execute(ctx.db);
         await writeAuditEvent(ctx.db, {
@@ -305,6 +306,8 @@ export async function registerAutomationsRoutes(
               actions = ${JSON.stringify(actions)}::jsonb,
               webhook_token = ${token},
               next_run_at = ${triggerChanged || (enabled && !existing.enabled) ? null : existing.next_run_at},
+              enabled_at = CASE WHEN ${enabled}::boolean AND NOT ${existing.enabled}::boolean THEN now()
+                                WHEN NOT ${enabled}::boolean THEN NULL ELSE enabled_at END,
               updated_by = ${base.userId},
               updated_at = now()
           WHERE id = ${automationId}

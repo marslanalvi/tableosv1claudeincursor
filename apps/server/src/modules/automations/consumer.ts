@@ -41,8 +41,10 @@ interface ChangeRow {
   session_id: string | null;
   client_mutation_id: string | null;
   via: string;
+  actor_type: string | null;
   actor_id: string | null;
   ops: unknown[];
+  inverse_ops: unknown[] | null;
   table_ids: string[];
 }
 
@@ -52,6 +54,7 @@ interface AutomationRow {
   workspace_id: string;
   trigger: TriggerDef;
   owner: string | null;
+  enabled_at: Date | null;
 }
 
 type EventKind = "created" | "updated" | "deleted" | "form" | "other";
@@ -94,14 +97,33 @@ function collectRecordIds(payload: Record<string, unknown>, ops: unknown[]): str
   return [...out];
 }
 
-/** Changed field ids (fld_) or null when unknown. */
+function cellMap(o: Record<string, unknown>): Record<string, unknown> | null {
+  for (const key of ["cells", "fields", "changes"]) {
+    const cells = o[key];
+    if (cells && typeof cells === "object" && !Array.isArray(cells)) return cells as Record<string, unknown>;
+  }
+  return null;
+}
+
+/**
+ * Changed field ids (fld_) or null when unknown. Record ops carry the full
+ * cell map after the write and `inverse_ops` the full map before it, so the
+ * changed fields are the keys whose values differ.
+ */
 function collectChangedFields(
   payload: Record<string, unknown>,
   ops: unknown[],
+  inverseOps: unknown[],
   slotToField: Map<string, string>,
 ): Set<string> | null {
   const out = new Set<string>();
   let known = false;
+  const addKey = (k: string) => {
+    const viaSlot = slotToField.get(k);
+    if (viaSlot) out.add(viaSlot);
+    const p = toPid(k, "fld");
+    if (p) out.add(p);
+  };
   for (const k of ["changedFieldIds", "fieldIds"]) {
     const arr = payload[k];
     if (Array.isArray(arr)) {
@@ -112,19 +134,26 @@ function collectChangedFields(
       }
     }
   }
+  const before = new Map<string, Record<string, unknown>>();
+  for (const op of inverseOps ?? []) {
+    if (!op || typeof op !== "object") continue;
+    const o = op as Record<string, unknown>;
+    const cells = cellMap(o);
+    if (cells && typeof o["recordId"] === "string") before.set(o["recordId"], cells);
+  }
   for (const op of ops ?? []) {
     if (!op || typeof op !== "object") continue;
     const o = op as Record<string, unknown>;
-    for (const key of ["cells", "fields", "changes"]) {
-      const cells = o[key];
-      if (cells && typeof cells === "object" && !Array.isArray(cells)) {
-        known = true;
-        for (const k of Object.keys(cells)) {
-          const viaSlot = slotToField.get(k);
-          if (viaSlot) out.add(viaSlot);
-          const p = toPid(k, "fld");
-          if (p) out.add(p);
+    const cells = cellMap(o);
+    if (cells) {
+      known = true;
+      const prev = typeof o["recordId"] === "string" ? before.get(o["recordId"]) : undefined;
+      if (prev) {
+        for (const k of new Set([...Object.keys(cells), ...Object.keys(prev)])) {
+          if (JSON.stringify(cells[k] ?? null) !== JSON.stringify(prev[k] ?? null)) addKey(k);
         }
+      } else {
+        for (const k of Object.keys(cells)) addKey(k);
       }
     }
     for (const key of ["fieldId", "linkFieldId"]) {
@@ -209,14 +238,14 @@ export class AutomationConsumer {
         if (!autos) {
           autos = (
             await sql<AutomationRow>`
-              SELECT id, base_id, workspace_id, trigger, COALESCE(updated_by, created_by) AS owner
+              SELECT id, base_id, workspace_id, trigger, COALESCE(updated_by, created_by) AS owner, enabled_at
               FROM data.automations
               WHERE base_id = ${ev.base_id} AND enabled AND deleted_at IS NULL
             `.execute(db)
           ).rows;
           automationsByBase.set(ev.base_id, autos);
         }
-        if (autos.length > 0) await this.handleEvent(db, ev, autos);
+        if (autos.length > 0 && (await this.handleEvent(db, ev, autos)) === "defer") continue;
       } catch (err) {
         this.deps.log.error({ err, eventId: ev.id }, "automation trigger evaluation failed");
       }
@@ -240,17 +269,19 @@ export class AutomationConsumer {
     return events.rows.length;
   }
 
-  private async handleEvent(db: TabulaDb, ev: OutboxRow, autos: AutomationRow[]): Promise<void> {
+  /** Returns "defer" when the event should be re-read on a later tick. */
+  private async handleEvent(db: TabulaDb, ev: OutboxRow, autos: AutomationRow[]): Promise<void | "defer"> {
     const payload = ev.payload ?? {};
     let change: ChangeRow | null = null;
     if (ev.base_seq !== null) {
       const c = await sql<ChangeRow>`
-        SELECT session_id, client_mutation_id, via, actor_id, ops, table_ids
+        SELECT session_id, client_mutation_id, via, actor_type, actor_id, ops, inverse_ops, table_ids
         FROM data.base_changes WHERE base_id = ${ev.base_id} AND seq = ${ev.base_seq}
       `.execute(db);
       change = c.rows[0] ?? null;
     }
     const ops = Array.isArray(change?.ops) ? change!.ops : [];
+    const inverseOps = Array.isArray(change?.inverse_ops) ? change!.inverse_ops : [];
 
     // --- causation (loop guard) ---
     let causedBy: { automationId: string; depth: number } | null = null;
@@ -275,16 +306,29 @@ export class AutomationConsumer {
     else if (CREATED.has(ev.event_type)) kind = "created";
     else if (UPDATED.has(ev.event_type)) kind = "updated";
     else if (DELETED.has(ev.event_type)) kind = "deleted";
-    const viaForm =
-      kind === "form" ||
-      (kind === "created" &&
-        (change?.via === "form" || payload["via"] === "form" || typeof payload["formViewId"] === "string"));
     if (kind === "other") return;
 
     const tableRaw =
       (payload["tableId"] as string | undefined) ?? (change?.table_ids?.length === 1 ? change.table_ids[0] : undefined);
     const tableId = toPid(tableRaw ?? null, "tbl");
     const recordIds = collectRecordIds(payload, ops);
+
+    let viaForm =
+      kind === "form" ||
+      (kind === "created" &&
+        (change?.via === "form" || payload["via"] === "form" || typeof payload["formViewId"] === "string"));
+    if (!viaForm && kind === "created" && change?.actor_type === "system" && autos.some((a) => a.trigger?.type === "form.submitted")) {
+      // Public form submissions are written by the system actor; the share
+      // submission row is inserted right after the record commits.
+      const rids = recordIds.map(toUuidSafe).filter(Boolean) as string[];
+      const sub = rids.length
+        ? await sql<{ n: number }>`
+            SELECT count(*)::int AS n FROM data.share_submissions WHERE record_id = ANY(${rids}::uuid[])
+          `.execute(db)
+        : null;
+      if ((sub?.rows[0]?.n ?? 0) > 0) viaForm = true;
+      else if (Date.now() - ev.created_at.getTime() < 5_000) return "defer";
+    }
     const actorId = change?.actor_id ?? ((ev.actor?.["id"] as string | undefined) ?? null);
 
     for (const auto of autos) {
@@ -292,6 +336,7 @@ export class AutomationConsumer {
       const cfg = trig.config ?? {};
       const autoTable = toPid(cfg.tableId ?? null, "tbl");
       if (causedBy && causedBy.automationId === auto.id) continue;
+      if (auto.enabled_at && ev.created_at < auto.enabled_at) continue;
       if (depth > MAX_CAUSATION_DEPTH) {
         this.deps.log.warn({ automationId: auto.id, eventId: ev.id, depth }, "automation loop guard: depth exceeded");
         continue;
@@ -341,8 +386,23 @@ export class AutomationConsumer {
             (payload["formViewId"] as string | undefined) ?? (payload["viewId"] as string | undefined) ?? null,
             "viw",
           );
-          if (wantView && gotView && wantView !== gotView) break;
-          for (const r of recordIds) await enqueue(r, gotView ? { viewId: gotView } : {});
+          for (const r of recordIds) {
+            let view = gotView;
+            if (!view) {
+              const rid = toUuidSafe(r);
+              const sub = rid
+                ? await sql<{ target_id: string }>`
+                    SELECT l.target_id FROM data.share_submissions s
+                    JOIN data.share_links l ON l.id = s.share_link_id
+                    WHERE s.record_id = ${rid} AND l.target_type = 'form'
+                    LIMIT 1
+                  `.execute(db)
+                : null;
+              view = toPid(sub?.rows[0]?.target_id ?? null, "viw");
+            }
+            if (wantView && view && wantView !== view) continue;
+            await enqueue(r, view ? { viewId: view } : {});
+          }
           break;
         }
         case "record.updated": {
@@ -351,7 +411,7 @@ export class AutomationConsumer {
           let changed: Set<string> | null = null;
           if (watched.length > 0) {
             const slotMap = await slotToFieldMap(db, tableRaw ?? null);
-            changed = collectChangedFields(payload, ops, slotMap);
+            changed = collectChangedFields(payload, ops, inverseOps, slotMap);
             if (changed && !watched.some((w) => changed!.has(w))) break;
           }
           for (const r of recordIds) {

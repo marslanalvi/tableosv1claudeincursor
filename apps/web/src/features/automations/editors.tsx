@@ -440,7 +440,10 @@ function RecipientPicker({
               checked={on}
               onChange={() => onChange(on ? value.filter((x) => x !== p.id) : [...value, p.id])}
             />
-            {p.name} <span className={styles.muted}>{p.email}</span>
+            <span className={styles.checkText}>
+              <span>{p.name}</span>
+              <span className={styles.muted}>{p.email}</span>
+            </span>
           </label>
         );
       })}
@@ -678,18 +681,23 @@ function ConditionEditor({
             const unary = COND_OPS.find((o) => o.op === c.op)?.unary;
             return (
               <div key={i} className={styles.condRow}>
-                <TokenInput value={c.left} onChange={(v) => setCond(i, { ...c, left: v })} tokens={tokens} placeholder="Value (use +)" ariaLabel="Left value" />
-                <select className={styles.selectCompact} value={c.op} onChange={(e) => setCond(i, { ...c, op: e.target.value as BranchCondition["op"] })}>
-                  {COND_OPS.map((o) => (
-                    <option key={o.op} value={o.op}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                {unary ? <span /> : <TokenInput value={c.right ?? ""} onChange={(v) => setCond(i, { ...c, right: v })} tokens={tokens} ariaLabel="Right value" />}
-                <button type="button" className={styles.iconBtn} aria-label="Remove condition" onClick={() => setCond(i, null)}>
-                  ×
-                </button>
+                <div className={styles.condRowHead}>
+                  <span className={styles.muted}>{i === 0 ? "Where" : cfg.match === "any" ? "Or" : "And"}</span>
+                  <button type="button" className={styles.iconBtn} aria-label="Remove condition" onClick={() => setCond(i, null)}>
+                    ×
+                  </button>
+                </div>
+                <TokenInput value={c.left} onChange={(v) => setCond(i, { ...c, left: v })} tokens={tokens} placeholder="Value — use + to pick a field" ariaLabel="Left value" />
+                <div className={styles.condRowOp}>
+                  <select className={styles.selectCompact} value={c.op} onChange={(e) => setCond(i, { ...c, op: e.target.value as BranchCondition["op"] })}>
+                    {COND_OPS.map((o) => (
+                      <option key={o.op} value={o.op}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {unary ? null : <TokenInput value={c.right ?? ""} onChange={(v) => setCond(i, { ...c, right: v })} tokens={tokens} placeholder="Compare to" ariaLabel="Right value" />}
+                </div>
               </div>
             );
           })}

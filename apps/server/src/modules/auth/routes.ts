@@ -97,7 +97,10 @@ const profileBody = z.object({
 /** Login attempts: per email+ip and per ip, within a 15 minute window. */
 const LOGIN_WINDOW_SEC = 15 * 60;
 const LOGIN_MAX_PER_ACCOUNT = 10;
-const LOGIN_MAX_PER_IP = 50;
+/** Per-IP limits; dev/test default high because every test client shares 127.0.0.1. */
+const IS_PROD = process.env["NODE_ENV"] === "production";
+const LOGIN_MAX_PER_IP = Number(process.env["AUTH_LOGIN_MAX_PER_IP"] ?? (IS_PROD ? 50 : 2000));
+const SIGNUP_MAX_PER_IP = Number(process.env["AUTH_SIGNUP_MAX_PER_IP"] ?? (IS_PROD ? 30 : 2000));
 const MFA_MAX_ATTEMPTS = 5;
 const MFA_LOGIN_TTL_MS = 5 * 60 * 1000;
 
@@ -142,7 +145,7 @@ export async function registerAuthRoutes(
       const body = signupBody.parse(request.body);
       const emailNormalized = body.email.toLowerCase();
 
-      const ipHit = await limiter.hit(`signup:ip:${request.ip}`, 30, 3600);
+      const ipHit = await limiter.hit(`signup:ip:${request.ip}`, SIGNUP_MAX_PER_IP, 3600);
       if (!ipHit.allowed) {
         rateLimited(request, reply, ipHit.retryAfterSec);
         return;
