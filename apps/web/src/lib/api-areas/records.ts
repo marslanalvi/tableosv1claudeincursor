@@ -29,6 +29,39 @@ export interface RecordsQueryBody {
   fields?: string[];
 }
 
+/** `GET …/records/:r/history` (record revision history, newest first). */
+export type HistoryChangeWire =
+  | { fieldId: string; before?: unknown; after?: unknown }
+  | { fieldId: string; added: { id: string; name: string }[]; removed: { id: string; name: string }[] };
+
+export interface HistoryEntryWire {
+  id: string;
+  seq: number;
+  at: string;
+  kind: "created" | "updated" | "deleted" | "restored";
+  actor: { id: string; name: string; email: string } | null;
+  source: "user" | "automation" | "form" | "import" | "undo" | "redo" | "restore" | "system";
+  sourceName?: string;
+  duplicatedFrom?: { id: string; name: string };
+  changes: HistoryChangeWire[];
+  detailed: boolean;
+}
+
+export interface HistoryFieldWire {
+  id: string;
+  name: string;
+  type: string;
+  config: Record<string, unknown>;
+  deleted: boolean;
+}
+
+export interface RecordHistoryPage {
+  entries: HistoryEntryWire[];
+  fields: Record<string, HistoryFieldWire>;
+  nextCursor: string | null;
+  retentionDays: number | null;
+}
+
 const tbl = (b: string, t: string) => `/v1/bases/${b}/tables/${t}`;
 
 function isNotFound(e: unknown): boolean {
@@ -81,6 +114,16 @@ export const recordsApi = {
 
   async get(baseId: string, tableId: string, recordId: string) {
     return unwrapRecord(await request(`${tbl(baseId, tableId)}/records/${recordId}`));
+  },
+
+  history(baseId: string, tableId: string, recordId: string, opts: { cursor?: string | null; limit?: number } = {}, signal?: AbortSignal) {
+    const qs = new URLSearchParams();
+    if (opts.cursor) qs.set("cursor", opts.cursor);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    const q = qs.toString();
+    return request<RecordHistoryPage>(`${tbl(baseId, tableId)}/records/${recordId}/history${q ? `?${q}` : ""}`, {
+      ...(signal ? { signal } : {}),
+    });
   },
 
   /** Resolves `null` if the server answered without a body (record was still created). */

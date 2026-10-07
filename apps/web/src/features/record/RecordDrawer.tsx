@@ -13,6 +13,7 @@ import { isEditableField } from "../grid/grid-utils.ts";
 import { ConfirmDialog, Menu, type MenuEntry } from "../grid/Menu.tsx";
 import { Toaster, toastError, toastInfo } from "../grid/toast.tsx";
 import { noteRecordVersion, useRecordWrites } from "../grid/useRecordWrites.ts";
+import { RecordActivity } from "./RecordActivity.tsx";
 import styles from "./record-drawer-v2.module.css";
 
 // E owns RecordComments; mount it when the file exists (CONTRACTS §10).
@@ -266,14 +267,22 @@ export function RecordDrawer({ baseId, tableId, recordId, onClose, onNavigate, h
               )}
             </div>
             <aside className={styles.side}>
-              <div className={styles.sideHead}>Comments</div>
-              {RecordComments ? (
-                <Suspense fallback={<div className={styles.sideBody}>Loading comments…</div>}>
-                  <RecordComments baseId={baseId} tableId={tableId} recordId={recordId} />
-                </Suspense>
-              ) : (
-                <div className={styles.sideBody}>Comments are not available yet.</div>
-              )}
+              <RecordActivity
+                baseId={baseId}
+                tableId={tableId}
+                recordId={recordId}
+                recordVersion={serverRec?.version}
+                fields={fields}
+                comments={
+                  RecordComments ? (
+                    <Suspense fallback={<div className={styles.sideBody}>Loading comments…</div>}>
+                      <RecordComments baseId={baseId} tableId={tableId} recordId={recordId} />
+                    </Suspense>
+                  ) : (
+                    <div className={styles.sideBody}>Comments are not available yet.</div>
+                  )
+                }
+              />
             </aside>
           </div>
         </div>

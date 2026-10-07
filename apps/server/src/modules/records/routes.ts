@@ -13,6 +13,7 @@ import { assertCan } from "../access/assert.js";
 import { compileForUser } from "../access/compile.js";
 import { withBaseTx, type MutationActor, type BaseMutationContext } from "../../kernel/mutation.js";
 import { LimitsService } from "../billing/limits-service.js";
+import { registerRecordHistoryRoutes } from "./history-routes.js";
 import { serializeRecordsByIds } from "./serialize.js";
 import {
   MAX_BATCH,
@@ -21,6 +22,7 @@ import {
   createRecordsInTx,
   deleteRecordsInTx,
   duplicateRecordInTx,
+  linkHistory,
   moveRecordInTx,
   touchedTableIds,
   updateRecordsInTx,
@@ -137,6 +139,7 @@ export async function registerRecordsRoutes(
   app: FastifyInstance,
   ctx: AppContext,
 ): Promise<void> {
+  await registerRecordHistoryRoutes(app, ctx);
   const limits = new LimitsService(ctx.db);
   const serialize = (tableId: string, ids: string[]) =>
     serializeRecordsByIds(ctx.db, tableId, ids, { storage: ctx.storage });
@@ -165,7 +168,7 @@ export async function registerRecordsRoutes(
             return {
               kind: "records" as const,
               ops: [
-                { op: "record.created", tableId: r.tableId, recordId: ids[0] },
+                { op: "record.created", tableId: r.tableId, recordId: ids[0], ...linkHistory(res.linkDiffs) },
                 ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
                 ...computeOps(res.compute),
               ],
@@ -210,7 +213,7 @@ export async function registerRecordsRoutes(
             return {
               kind: "bulk" as const,
               ops: [
-                { op: "records.created", tableId: r.tableId, recordIds: ids },
+                { op: "records.created", tableId: r.tableId, recordIds: ids, ...linkHistory(res.linkDiffs) },
                 ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
                 ...computeOps(res.compute),
               ],
@@ -257,7 +260,13 @@ export async function registerRecordsRoutes(
             return {
               kind: "bulk" as const,
               ops: [
-                ...items.map((it) => ({ op: "record.updated", tableId: r.tableId, recordId: it.id, cells: res.after.get(it.id) })),
+                ...items.map((it) => ({
+                  op: "record.updated",
+                  tableId: r.tableId,
+                  recordId: it.id,
+                  cells: res.after.get(it.id),
+                  ...linkHistory(res.linkDiffs, it.id),
+                })),
                 ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
                 ...computeOps(res.compute),
               ],
@@ -354,7 +363,7 @@ export async function registerRecordsRoutes(
             return {
               kind: "records" as const,
               ops: [
-                { op: "record.updated", tableId: r.tableId, recordId, cells: res.after.get(recordId) },
+                { op: "record.updated", tableId: r.tableId, recordId, cells: res.after.get(recordId), ...linkHistory(res.linkDiffs) },
                 ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
                 ...computeOps(res.compute),
               ],
@@ -438,7 +447,7 @@ export async function registerRecordsRoutes(
             return {
               kind: "records" as const,
               ops: [
-                { op: "record.created", tableId: r.tableId, recordId: newId, duplicatedFrom: sourceId },
+                { op: "record.created", tableId: r.tableId, recordId: newId, duplicatedFrom: sourceId, ...linkHistory(res.linkDiffs) },
                 ...computeOps(res.compute),
               ],
               inverseOps: [{ op: "record.deleted", tableId: r.tableId, recordId: newId }],

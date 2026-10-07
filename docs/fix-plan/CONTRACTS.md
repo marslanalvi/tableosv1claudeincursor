@@ -429,3 +429,17 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
 - **Grid paging:** the first page is 200 rows; later pages use the server maximum (500). When not grouped, the grid reserves height for rows not loaded yet (from the server's `totalCount`), so the scrollbar spans the whole table. Scrolling or jumping into that area keeps loading pages until the rows on screen are filled. The footer count follows filter + search, and shows "Loading…" while a new query replaces the old one.
 - **`FieldManager`** visibility toggles also invalidate `["views", baseId]` (F's views query), so the open grid updates at once.
 - **Removed** (dead after the fallbacks were dropped from `table-grid.tsx`): `features/grid/DomGrid.tsx`, `CanvasTableGrid.tsx`, `CellEditor.tsx`, `features/schema/FieldHeader.tsx`, `features/record/RecordExpandDrawer.tsx`, `features/record/record-drawer.module.css`. `features/grid/grid.module.css` now only has `.status`, which `table-grid.tsx` uses. Nothing in the repo imports `@tabula/grid` any more. `apps/web/package.json` still lists it as a dependency, and the package was not deleted.
+
+## r2-grid: record revision history + view row numbers
+
+- `GET /v1/bases/:b/tables/:t/records/:r/history?cursor=&limit=` (base.read; 404 when no access; 422 on bad id/cursor).
+  Returns `{ entries[], fields{fld_: {id,name,type,config,deleted}}, nextCursor, retentionDays }`, newest first.
+  Entry: `{ id, seq, at, kind: created|updated|deleted|restored, actor, source: user|automation|form|import|api|undo|redo|restore|system,
+  sourceName?, duplicatedFrom?, changes: [{fieldId, before?, after?} | {fieldId, added:[{id,name}], removed:[...]}], detailed }`.
+  Values are wire values. Changes to deleted fields keep the field's last name (`fields[id].deleted = true`). Cut off at the plan's `revisionRetentionDays`.
+  Web: `recordsApi.history`; React Query key `["record", b, t, r, "history"]` (refreshed by the existing `["record", b, t, r]` prefix invalidation).
+- `data.base_changes` ops: `record.created` / `records.created` / `record.updated` may carry `links: [{recordId, fieldId, added[], removed[], peerFieldId}]`
+  (link diffs from that write, including inverse side). Consumers must ignore unknown op keys. Undo/redo `record.updated` appliedOps now include `cells` and `prevCells`.
+  Writers outside records/ (wave4 record-writer, links route) don't emit `links` yet; the history reader also parses `link.add`/`link.remove`.
+- Migration 0062: GIN index `base_changes_ops_gin` on `data.base_changes (ops jsonb_path_ops)`.
+- Grid gutter shows the visual position 1..N of the current view (continuous across groups; collapsed groups still count). `rowNumber` is not a display value; the autonumber field still shows the stored number.

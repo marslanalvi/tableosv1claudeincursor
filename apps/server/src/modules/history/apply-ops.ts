@@ -440,7 +440,13 @@ export async function applyHistoryOpsInTx(
         `.execute(trx);
         await afterCellsChanged(trx, ctx, tableId, op.recordId, currentCells, changed);
         result.tableIds.add(tableId);
-        result.appliedOps.push({ op: "record.updated", recordId: op.recordId, tableId });
+        result.appliedOps.push({
+          op: "record.updated",
+          recordId: op.recordId,
+          tableId,
+          cells: currentCells,
+          prevCells: (row.cells ?? {}) as Record<string, unknown>,
+        });
         break;
       }
       case "table.renamed": {

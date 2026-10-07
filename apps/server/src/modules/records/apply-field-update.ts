@@ -2,7 +2,7 @@ import type { TabulaDb } from "@tabula/db";
 import type { Redis } from "ioredis";
 import { ApiError } from "../../http/errors.js";
 import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
-import { computeOps, touchedTableIds, updateRecordsInTx, TableWriter } from "./write.js";
+import { computeOps, linkHistory, touchedTableIds, updateRecordsInTx, TableWriter } from "./write.js";
 
 export class RecordFieldUpdateError extends Error {
   constructor(
@@ -79,7 +79,7 @@ export async function applyRecordFieldUpdate(
         newVersion = res.versions.get(params.recordId) ?? 0;
         const cells = res.after.get(params.recordId) ?? {};
         mutationOps = [
-          { op: "record.updated", tableId: params.tableId, recordId: params.recordId, cells },
+          { op: "record.updated", tableId: params.tableId, recordId: params.recordId, cells, ...linkHistory(res.linkDiffs) },
           ...computeOps(res.compute),
         ];
         return {

@@ -162,6 +162,52 @@ export class TableWriter {
     return out;
   }
 
+  /**
+   * Collaborator cells may only name users of this org, and attachment cells only
+   * files of this base (or files the same column already holds, e.g. after a base
+   * duplicate). Anything else would let a write reference another tenant's data.
+   */
+  async verifyRefs(trx: DbTrx, prepared: PreparedFields[]): Promise<void> {
+    const users = new Map<string, FieldRowFull>();
+    const atts = new Map<string, FieldRowFull>();
+    for (const p of prepared) {
+      for (const [slot, v] of p.cells) {
+        const f = this.schema.bySlot.get(slot);
+        const into = f?.type === "collaborator" ? users : f?.type === "attachment" ? atts : null;
+        if (!f || !into || !Array.isArray(v)) continue;
+        for (const id of v) if (typeof id === "string") into.set(id, f);
+      }
+    }
+    const reject = (f: FieldRowFull, what: string): never => {
+      throw new ApiError(422, "FIELD_VALIDATION_FAILED", `${f.name}: ${what}`, { field: pid("fld", f.id) });
+    };
+    if (users.size) {
+      const ids = [...users.keys()];
+      const ok = await sql<{ id: string }>`
+        SELECT m.user_id AS id FROM core.organization_members m
+        JOIN core.workspaces w ON w.org_id = m.org_id
+        WHERE w.id = ${this.schema.table.workspaceId} AND m.status = 'active' AND m.user_id = ANY(${ids}::uuid[])
+      `.execute(trx);
+      const found = new Set(ok.rows.map((r) => r.id));
+      for (const [id, f] of users) if (!found.has(id)) reject(f, `Unknown user "${pid("usr", id)}"`);
+    }
+    if (atts.size) {
+      const ids = [...atts.keys()];
+      const ok = await sql<{ id: string }>`
+        SELECT id FROM data.attachments WHERE base_id = ${this.schema.table.baseId} AND id = ANY(${ids}::uuid[])
+      `.execute(trx);
+      const found = new Set(ok.rows.map((r) => r.id));
+      for (const [id, f] of atts) {
+        if (found.has(id)) continue;
+        const held = await sql<{ one: number }>`
+          SELECT 1 AS one FROM data.records
+          WHERE table_id = ${this.tableId} AND cells -> ${String(f.slot)} ? ${id} LIMIT 1
+        `.execute(trx);
+        if (held.rows.length === 0) reject(f, `Unknown attachment "${pid("att", id)}"`);
+      }
+    }
+  }
+
   private createOption(field: FieldRowFull, label: string): string {
     const options = (Array.isArray(field.config["options"]) ? field.config["options"] : []) as Array<{
       id: string;
@@ -232,8 +278,18 @@ async function appendOrderKeys(trx: DbTrx, tableId: string, n: number): Promise<
   }
 }
 
+/** One record's link field change (raw uuids), kept on ops for record history. */
+export interface LinkDiff {
+  recordId: string;
+  fieldId: string;
+  added: string[];
+  removed: string[];
+  peerFieldId: string | null;
+}
+
 interface LinkEffects {
   changes: RecordChange[];
+  diffs?: LinkDiff[];
 }
 
 async function applyLinks(
@@ -254,6 +310,15 @@ async function applyLinks(
       mode,
     });
     if (!res.changed) continue;
+    if (res.added.length || res.removed.length) {
+      (effects.diffs ??= []).push({
+        recordId,
+        fieldId,
+        added: res.added,
+        removed: res.removed,
+        peerFieldId: res.peerFieldId,
+      });
+    }
     effects.changes.push({ tableId: ownTableId, recordIds: [recordId], fieldIds: [fieldId] });
     const peers = [...res.added, ...res.removed];
     if (peers.length && res.peerFieldId) {
@@ -300,6 +365,7 @@ export interface CreateResult {
   compute: ComputeOutcome;
   /** Select fields whose options were extended by typecast. */
   configChangedFieldIds: string[];
+  linkDiffs: LinkDiff[];
 }
 
 export async function createRecordsInTx(
@@ -343,6 +409,7 @@ export async function createRecordsInTx(
   }
 
   const prepared = items.map((item) => writer.prepare(item.fields ?? {}, opts));
+  await writer.verifyRefs(trx, prepared);
   const configChangedFieldIds = await writer.persistConfigChanges(trx);
 
   const n = items.length;
@@ -357,7 +424,7 @@ export async function createRecordsInTx(
   const first = Number(rowNum.rows[0]?.first ?? 1);
   const orderKeys = opts.orderKeys ?? (await appendOrderKeys(trx, tableId, n));
 
-  const effects: LinkEffects = { changes: [] };
+  const effects: LinkEffects = { changes: [], diffs: [] };
   for (let i = 0; i < n; i++) {
     const id = ids[i]!;
     const cells = applyCells({}, prepared[i]!.cells);
@@ -384,7 +451,7 @@ export async function createRecordsInTx(
 
   const seeds = writer.computedFieldIds.map((fieldId) => ({ fieldId, recordIds: ids }));
   const compute = await runCompute(ctx, effects.changes, seeds);
-  return { ids, compute, configChangedFieldIds };
+  return { ids, compute, configChangedFieldIds, linkDiffs: effects.diffs ?? [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +471,7 @@ export interface UpdateResult {
   after: Map<string, Record<string, unknown>>;
   compute: ComputeOutcome;
   configChangedFieldIds: string[];
+  linkDiffs: LinkDiff[];
 }
 
 function toRecordUuid(id: string): string {
@@ -429,6 +497,7 @@ export async function updateRecordsInTx(
     throw new ApiError(422, "DUPLICATE_RECORD_ID", "The same record appears more than once in the request");
   }
   const prepared = items.map((item) => writer.prepare(item.fields ?? {}, opts));
+  await writer.verifyRefs(trx, prepared);
 
   const existing = await sql<{ id: string; cells: Record<string, unknown>; version: string }>`
     SELECT id, cells, version FROM data.records
@@ -453,7 +522,7 @@ export async function updateRecordsInTx(
   const versions = new Map<string, number>();
   const before = new Map<string, Record<string, unknown>>();
   const after = new Map<string, Record<string, unknown>>();
-  const effects: LinkEffects = { changes: [] };
+  const effects: LinkEffects = { changes: [], diffs: [] };
   const changedByField = new Map<string, string[]>();
 
   for (let i = 0; i < ids.length; i++) {
@@ -491,7 +560,7 @@ export async function updateRecordsInTx(
   const meta = writer.modifiedMetaFieldIds;
   if (meta.length) changes.push({ tableId, recordIds: ids, fieldIds: meta });
   const compute = await runCompute(ctx, changes, []);
-  return { versions, before, after, compute, configChangedFieldIds };
+  return { versions, before, after, compute, configChangedFieldIds, linkDiffs: effects.diffs ?? [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -659,13 +728,14 @@ export async function duplicateRecordInTx(
   const res = await createRecordsInTx(ctx, tableId, [{ fields }], { writer, orderKeys: [key] });
   // Copy links (our side) in the same order.
   const newId = res.ids[0]!;
-  const effects: LinkEffects = { changes: [] };
+  const effects: LinkEffects = { changes: [], diffs: [] };
   for (const f of writer.schema.fields) {
     if (!LINK_TYPES.has(f.type)) continue;
     const { readRecordLinks } = await import("../links/record-links.js");
     const peers = await readRecordLinks(trx, f.id, sourceId);
     if (peers.length) await applyLinks(ctx, newId, new Map([[f.id, peers]]), effects, tableId);
   }
+  res.linkDiffs.push(...(effects.diffs ?? []));
   if (effects.changes.length) {
     const more = await runCompute(ctx, effects.changes, []);
     for (const [t, s] of more.touched) {
@@ -771,6 +841,15 @@ export function touchedTableIds(primary: string, ...outcomes: ComputeOutcome[]):
   const s = new Set<string>([primary]);
   for (const o of outcomes) for (const t of o.touched.keys()) s.add(t);
   return [...s];
+}
+
+/**
+ * `links` payload for a record op (record history reads it, including from the
+ * peer side). Pass `recordId` to keep only that record's diffs.
+ */
+export function linkHistory(diffs: readonly LinkDiff[], recordId?: string): { links?: LinkDiff[] } {
+  const list = recordId ? diffs.filter((d) => d.recordId === recordId) : [...diffs];
+  return list.length ? { links: list } : {};
 }
 
 /** Realtime ops for computed changes in other tables. */

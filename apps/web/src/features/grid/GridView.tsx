@@ -98,7 +98,8 @@ interface Cell {
   f: string;
 }
 type Item =
-  | { kind: "row"; rec: RecordWire; nav: number }
+  /** `num`: 1-based position in the view's order (the gutter number), counting rows of collapsed groups. */
+  | { kind: "row"; rec: RecordWire; nav: number; num: number }
   | { kind: "group"; path: string; depth: number; field: Field; label: string; color?: string | undefined; count: number; collapsed: boolean };
 
 const PAGE_SIZE = 200;
@@ -309,11 +310,16 @@ export function GridView(props: GridViewProps) {
       .slice(0, 3)
       .map((g) => allFields.find((f) => f.id === g.fieldId))
       .filter((f): f is Field => !!f);
+    // Rows in collapsed groups still take their number, so numbers don't shift when a group collapses.
+    let seq = 0;
     const build = (recs: RecordWire[], depth: number, path: string, hidden: boolean) => {
       if (depth >= gFields.length) {
-        if (hidden) return;
+        if (hidden) {
+          seq += recs.length;
+          return;
+        }
         for (const rec of recs) {
-          out.push({ kind: "row", rec, nav: nav.length });
+          out.push({ kind: "row", rec, nav: nav.length, num: ++seq });
           nav.push(rec);
         }
         return;
@@ -1279,12 +1285,12 @@ export function GridView(props: GridViewProps) {
           >
             ⋮⋮
           </span>
-          <span className={styles.rowNumText}>{rec.rowNumber ?? ni + 1}</span>
+          <span className={styles.rowNumText}>{it.num}</span>
           <input
             type="checkbox"
             className={styles.rowCheck}
             checked={rowSelected}
-            aria-label={`Select row ${ni + 1}`}
+            aria-label={`Select row ${it.num}`}
             onChange={() =>
               setSelectedRows((prev) => {
                 const next = new Set(prev);
