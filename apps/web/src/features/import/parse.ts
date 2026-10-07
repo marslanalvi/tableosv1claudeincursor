@@ -264,7 +264,7 @@ async function readZipEntry(buf: Uint8Array, e: ZipEntry): Promise<string> {
   const data = buf.subarray(start, start + e.compressedSize);
   if (e.method === 0) return new TextDecoder().decode(data);
   if (e.method !== 8) throw new Error("Unsupported compression in .xlsx");
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const stream = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
   return new Response(stream).text();
 }
 

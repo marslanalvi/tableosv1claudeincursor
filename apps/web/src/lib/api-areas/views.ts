@@ -8,6 +8,88 @@ import {
   type ViewDto,
 } from "../api.ts";
 
+/** CONTRACTS §5 */
+export type RowHeight = "short" | "medium" | "tall" | "extra";
+export type SortSpec = { fieldId: string; direction: "asc" | "desc" };
+export type SummaryKind =
+  | "none"
+  | "count"
+  | "empty"
+  | "filled"
+  | "unique"
+  | "sum"
+  | "avg"
+  | "min"
+  | "max";
+export type ColorConfig =
+  | { mode: "none" }
+  | { mode: "select"; fieldId: string }
+  | { mode: "conditions"; rules: { filter: FilterAst; color: string }[] };
+
+export interface FormFieldConfig {
+  fieldId: string;
+  required: boolean;
+  label?: string;
+  help?: string;
+}
+
+export interface ViewConfig {
+  filter: FilterAst | null;
+  sorts: SortSpec[];
+  groups: SortSpec[];
+  hiddenFieldIds: string[];
+  fieldOrder: string[];
+  fieldWidths: Record<string, number>;
+  frozenFieldCount: number;
+  rowHeight: RowHeight;
+  color: ColorConfig;
+  summary: Record<string, SummaryKind>;
+  kanban?: {
+    stackFieldId: string | null;
+    coverFieldId?: string | null;
+    hideEmptyStacks?: boolean;
+    collapsedStacks?: string[];
+    cardFieldIds?: string[];
+  };
+  calendar?: { dateFieldId: string | null; endDateFieldId?: string | null; mode?: "month" | "week" };
+  gallery?: { coverFieldId?: string | null; coverFit?: "cover" | "contain"; cardFieldIds?: string[] };
+  timeline?: { startFieldId: string | null; endFieldId?: string | null; scale?: "day" | "week" | "month" };
+  form?: {
+    title: string;
+    description: string;
+    fields: FormFieldConfig[];
+    submitLabel: string;
+    successMessage: string;
+    allowResubmit: boolean;
+  };
+}
+
+export interface ViewWire extends ViewDto {
+  tableId?: string;
+  isDefault?: boolean;
+  canEdit?: boolean;
+  config?: ViewConfig & Record<string, unknown>;
+}
+
+export const DEFAULT_VIEW_CONFIG: ViewConfig = {
+  filter: null,
+  sorts: [],
+  groups: [],
+  hiddenFieldIds: [],
+  fieldOrder: [],
+  fieldWidths: {},
+  frozenFieldCount: 1,
+  rowHeight: "short",
+  color: { mode: "none" },
+  summary: {},
+};
+
+/** Fill defaults client-side (server already does; this guards old payloads). */
+export function viewConfigOf(view: ViewDto | undefined | null): ViewConfig {
+  const raw = (view?.config ?? {}) as Partial<ViewConfig>;
+  return { ...DEFAULT_VIEW_CONFIG, ...raw };
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 /**
