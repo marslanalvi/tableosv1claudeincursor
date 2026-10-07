@@ -10,7 +10,7 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const TTL_HOURS = 24;
 const LOCK_MS = 60_000;
 /** POST endpoints that only read; replaying a cached page would return stale data. */
-const READ_ONLY_POST = /\/records\/(query|group)$/;
+const READ_ONLY_POST = /\/records\/(query|group)$|\/elements\/[^/]+\/(query|aggregate)$/;
 /** Chunked CSV/XLSX import: large bodies + long writes must not be keyed. */
 const SKIP_IDEMPOTENCY = /\/import(\/csv)?$/;
 

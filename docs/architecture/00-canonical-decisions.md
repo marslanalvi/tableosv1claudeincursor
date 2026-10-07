@@ -503,3 +503,13 @@ All `data.*` tables carry `workspace_id`, and it is in the primary key or a repl
 * **DLQ topics:** `tabula.base-changes.v1.dlq`, `tabula.domain-events.v1.dlq`, `tabula.audit.v1.dlq`, `tabula.usage.v1.dlq`.
 * **Redis namespaces added to §10:** `tok:` (token lookup), `basedir:` (routing cache), `sem:` (semaphores), `share:` (share unlock / rate), `mfa:` / `webauthn:chal:` / `pwreset:` / `emailverify:` / `hibp:` / `saml:replay:` (auth flows), `ws:ticket:` (ticket single-use), `loopguard:`, `evt:` / `dlqdone:` (consumer dedupe), `aidebounce:` / `ai:budget:` / `ai:health:`, `sidx:` (search indexing), `vorder:` / `vagg:` / `itfv:` / `iagg:` (view/interface caches), `perm:epoch:{baseId}`. Pub/sub channels: `rt:base:{baseId}` (MVP fan-out), `perm-epoch`, `routing`, `sess-revoke`, `feature-flags`, `admission`.
 * **Buckets added to §11:** `tabula-web-assets`.
+
+## 15. TableOS amendments (2026-10)
+
+| # | Decision | Detail |
+|---|---|---|
+| T1 | Every table always has a visible, hideable **Record ID** field | [07 §13](07-field-engine.md). Cannot delete/convert the last one (`RECORD_ID_REQUIRED`) |
+| T2 | The view field-visibility panel is named **Fields** | [10 §20](10-view-engine.md) |
+| T3 | View creation is reachable from the toolbar switcher, a sidebar `+` and an inline Create list | [10 §20](10-view-engine.md) |
+| T4 | Interfaces ship as an MVP (draft → publish snapshots, element-scoped server queries) for base members only | [13 §18](13-interface-builder.md) lists the deviations |
+| T5 | SQL-generated public ids must use `public.uuidv7()`; `gen_random_uuid()` breaks `encodePublicId` | migrations `0064`/`0065` |

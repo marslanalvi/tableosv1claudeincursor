@@ -45,10 +45,17 @@ const filterNode: z.ZodType<FilterAstJson> = z.lazy(() =>
   ]),
 ) as z.ZodType<FilterAstJson>;
 
-export const filterSchema = filterNode.refine(
-  (n) => depthOf(n) <= MAX_FILTER_DEPTH,
-  "Filter is nested too deeply",
-);
+/** Same cap the query engine enforces (`@tabula/filter` MAX_CONDITIONS). */
+const MAX_FILTER_CONDITIONS = 200;
+
+function conditionCount(node: FilterAstJson): number {
+  if (node.kind === "condition") return 1;
+  return node.children.reduce((n, c) => n + conditionCount(c), 0);
+}
+
+export const filterSchema = filterNode
+  .refine((n) => depthOf(n) <= MAX_FILTER_DEPTH, "Filter is nested too deeply")
+  .refine((n) => conditionCount(n) <= MAX_FILTER_CONDITIONS, `Filter has more than ${MAX_FILTER_CONDITIONS} conditions`);
 
 const fieldIdSchema = z.string().min(1).max(64);
 const sortSchema = z.object({

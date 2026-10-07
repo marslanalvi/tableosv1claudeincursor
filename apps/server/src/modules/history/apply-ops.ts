@@ -5,6 +5,7 @@ import { loadTableFields } from "../schema/field-map.js";
 import { afterRecordCellWrite } from "../records/post-write.js";
 import { loadSidecarFields, loadSidecarTableMeta } from "../recordstore/load-meta.js";
 import { deleteSidecars, upsertSidecars } from "../recordstore/sidecars.js";
+import { readRecordLinks } from "../links/record-links.js";
 import { createDeletionBatchInTx } from "./apply-inverse.js";
 
 type DbTrx = Transaction<Database>;
@@ -358,6 +359,46 @@ function findPairCells(
   return undefined;
 }
 
+interface LinkDiffOp {
+  recordId?: string;
+  fieldId?: string;
+  added?: string[];
+  removed?: string[];
+}
+
+/**
+ * Link changes live in `links` diffs on the forward op only (inverse ops carry
+ * cells). Redo applies the op's own diffs; undo inverts the pair op's diffs.
+ * Returns slot -> full target id list, for replace semantics in post-write.
+ */
+async function linkTargetsFor(
+  trx: DbTrx,
+  tableId: string,
+  op: HistoryOp,
+  pairOps: HistoryOp[],
+): Promise<Map<string, string[]>> {
+  const own = Array.isArray(op["links"]) ? (op["links"] as LinkDiffOp[]) : null;
+  const pair = own
+    ? null
+    : pairOps.find((p) => p.op === "record.updated" && p.recordId === op.recordId && Array.isArray(p["links"]));
+  const diffs = (own ?? (pair ? (pair["links"] as LinkDiffOp[]) : []))
+    .filter((d) => d && d.fieldId && (!d.recordId || d.recordId === op.recordId))
+    .map((d) => (own ? d : { ...d, added: d.removed, removed: d.added }));
+  const out = new Map<string, string[]>();
+  if (diffs.length === 0) return out;
+  const slotOf = new Map((await loadTableFields(trx, tableId)).map((f) => [f.id, String(f.slot)]));
+  for (const d of diffs) {
+    const slot = slotOf.get(d.fieldId!);
+    if (!slot) continue;
+    const current = out.get(slot) ?? (await readRecordLinks(trx, d.fieldId!, op.recordId!));
+    const removed = new Set(d.removed ?? []);
+    const next = current.filter((id) => !removed.has(id));
+    for (const id of d.added ?? []) if (!next.includes(id)) next.push(id);
+    out.set(slot, next);
+  }
+  return out;
+}
+
 /**
  * Apply history ops (inverse ops for undo, forward ops for redo).
  * `pairOps` are the ops of the opposite direction; for `record.updated` they
@@ -418,8 +459,9 @@ export async function applyHistoryOpsInTx(
         } else {
           for (const k of Object.keys(target)) slots.add(k);
         }
-        if (slots.size === 0) break;
-        const changed: Record<string, unknown> = {};
+        const linkTargets = await linkTargetsFor(trx, tableId, op, pairOps);
+        if (slots.size === 0 && linkTargets.size === 0) break;
+        const changed: Record<string, unknown> = Object.fromEntries(linkTargets);
         for (const k of slots) {
           if (k in target) {
             currentCells[k] = target[k];

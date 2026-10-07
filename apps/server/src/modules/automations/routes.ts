@@ -121,7 +121,8 @@ export async function registerAutomationsRoutes(
   const webhookUrl = (token: string | null) =>
     token ? `${ctx.env.API_URL}/v1/hooks/${token}` : null;
 
-  function dto(r: AutomationRow) {
+  /** The webhook URL embeds the trigger secret: only automation managers may see it. */
+  function dto(r: AutomationRow, canManage = true) {
     return {
       id: pid("aut", r.id),
       name: r.name,
@@ -133,7 +134,7 @@ export async function registerAutomationsRoutes(
       lastRunAt: r.last_run_at?.toISOString() ?? null,
       nextRunAt: r.next_run_at?.toISOString() ?? null,
       lastRunStatus: r.last_status,
-      webhookUrl: r.trigger?.type === "webhook.received" ? webhookUrl(r.webhook_token) : null,
+      webhookUrl: canManage && r.trigger?.type === "webhook.received" ? webhookUrl(r.webhook_token) : null,
     };
   }
 
@@ -142,7 +143,7 @@ export async function registerAutomationsRoutes(
     request: FastifyRequest<{ Params: { baseId: string } }>,
     reply: FastifyReply,
     action: Action,
-  ): Promise<{ baseId: string; workspaceId: string; userId: string } | null> {
+  ): Promise<{ baseId: string; workspaceId: string; userId: string; canManage: boolean } | null> {
     const user = request.user;
     if (!user) {
       unauthorized(request, reply);
@@ -158,7 +159,12 @@ export async function registerAutomationsRoutes(
       forbidden(request, reply, `Missing permission: ${action}`);
       return null;
     }
-    return { baseId, workspaceId: snap.workspaceId, userId: user.id };
+    return {
+      baseId,
+      workspaceId: snap.workspaceId,
+      userId: user.id,
+      canManage: authorize(snap, "base.manage_schema"),
+    };
   }
 
   async function loadAutomation(baseId: string, automationId: string): Promise<AutomationRow | null> {
@@ -195,7 +201,7 @@ export async function registerAutomationsRoutes(
           ORDER BY a.created_at ASC
         `.execute(ctx.db);
         void reply.send({
-          automations: result.rows.map(dto),
+          automations: result.rows.map((row) => dto(row, base.canManage)),
           limits: {
             maxAutomations: MAX_AUTOMATIONS,
             remaining: Math.max(0, MAX_AUTOMATIONS - result.rows.length),
@@ -218,7 +224,7 @@ export async function registerAutomationsRoutes(
           notFound(request, reply, "Automation not found");
           return;
         }
-        void reply.send({ automation: dto(row) });
+        void reply.send({ automation: dto(row, base.canManage) });
       } catch (err) {
         handleRouteError(request, reply, err);
       }

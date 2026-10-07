@@ -21,6 +21,11 @@ export interface FormulaContext {
   recordId?: string;
   createdTime?: string;
   lastModifiedTime?: string;
+  /** Autonumber of the record (ROW_NUMBER). */
+  rowNumber?: number;
+  /** Display names for CREATED_BY() / MODIFIED_BY(). */
+  createdBy?: string;
+  modifiedBy?: string;
   /** Clock override for tests (TODAY/NOW). */
   now?: Date;
 }
@@ -393,6 +398,11 @@ function compare(op: string, lRaw: RuntimeValue, rRaw: RuntimeValue): boolean {
       const eq = toNumber(other) === 0;
       return op === "=" ? eq : !eq;
     }
+    if (op === "=" || op === "!=") {
+      // Equality compares at 15 significant digits so 0.1 + 0.2 = 0.3 (architecture/08 §7.1).
+      const eq = Number(toNumber(l).toPrecision(15)) === Number(toNumber(r).toPrecision(15));
+      return op === "=" ? eq : !eq;
+    }
     cmp = toNumber(l) - toNumber(r);
   } else {
     const a = toText(l);
@@ -696,21 +706,22 @@ function evalCall(name: string, argAsts: FormulaAst[], ctx: FormulaContext): Run
     // ---- text ----
     case "CONCATENATE":
       return a.map((v) => toText(v)).join("");
+    // Text positions count Unicode code points (never split a surrogate pair).
     case "LEFT":
       argCount(name, argAsts, 1, 2);
-      return s0().slice(0, Math.max(0, Math.trunc(n(1, 1))));
+      return Array.from(s0()).slice(0, Math.max(0, Math.trunc(n(1, 1)))).join("");
     case "RIGHT": {
       argCount(name, argAsts, 1, 2);
       const len = Math.max(0, Math.trunc(n(1, 1)));
-      return len === 0 ? "" : s0().slice(-len);
+      return len === 0 ? "" : Array.from(s0()).slice(-len).join("");
     }
     case "MID": {
       argCount(name, argAsts, 3, 3);
       const start = Math.max(1, Math.trunc(n(1)));
-      return s0().substr(start - 1, Math.max(0, Math.trunc(n(2))));
+      return Array.from(s0()).slice(start - 1, start - 1 + Math.max(0, Math.trunc(n(2)))).join("");
     }
     case "LEN":
-      return s0().length;
+      return Array.from(s0()).length;
     case "LOWER":
       return s0().toLowerCase();
     case "UPPER":
@@ -919,6 +930,238 @@ function evalCall(name: string, argAsts: FormulaAst[], ctx: FormulaContext): Run
       if (!d) return null;
       return Math.abs(dateDiff(now, d, "d"));
     }
+    default: {
+      const alias = DOC_ALIASES[name];
+      if (alias) return evalCall(alias, argAsts, ctx);
+      return evalCatalogue(name, a, argAsts, ctx);
+    }
+  }
+}
+
+/** Catalogue names (architecture/08 §6) that map 1:1 onto an existing function. */
+const DOC_ALIASES: Record<string, string> = {
+  CONCAT: "CONCATENATE",
+  REPLACE_AT: "REPLACE",
+  ROUND_UP: "ROUNDUP",
+  ROUND_DOWN: "ROUNDDOWN",
+  DATE_ADD: "DATEADD",
+  WORKDAY_ADD: "WORKDAY",
+  WORKDAYS_BETWEEN: "WORKDAY_DIFF",
+  FORMAT_DATE: "DATETIME_FORMAT",
+  PARSE_DATETIME: "DATETIME_PARSE",
+  COUNT_ALL: "COUNTALL",
+  ARRAY_JOIN: "ARRAYJOIN",
+  ARRAY_UNIQUE: "ARRAYUNIQUE",
+  ARRAY_COMPACT: "ARRAYCOMPACT",
+  ARRAY_FLATTEN: "ARRAYFLATTEN",
+  ARRAY_SLICE: "ARRAYSLICE",
+  REGEX_TEST: "REGEX_MATCH",
+  MODIFIED_TIME: "LAST_MODIFIED_TIME",
+};
+
+function validTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Offset (ms) of `tz` from UTC at instant `d`. */
+function tzOffsetMs(d: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return asUtc - Math.floor(d.getTime() / 1000) * 1000;
+}
+
+function requireTz(v: RuntimeValue | undefined): string {
+  const tz = toText(v).trim();
+  if (!validTimeZone(tz)) throw new FormulaEvalError(`#TZ Unknown time zone "${tz}"`);
+  return tz;
+}
+
+function sortKey(v: RuntimeValue): number | string {
+  if (typeof v === "number") return v;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "boolean") return v ? 1 : 0;
+  return toText(v).toLowerCase();
+}
+
+/** Formats a number with a spreadsheet-like pattern ("0", "0.00", "#,##0.0", "0%"). */
+function formatNumberPattern(x: number, pattern: string): string {
+  const pct = pattern.trim().endsWith("%");
+  const v = pct ? x * 100 : x;
+  const dec = /\.([0#]+)/.exec(pattern)?.[1]?.length ?? 0;
+  const grouped = pattern.includes(",");
+  const s = v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec, useGrouping: grouped });
+  return pct ? `${s}%` : s;
+}
+
+function evalCatalogue(name: string, a: RuntimeValue[], argAsts: FormulaAst[], ctx: FormulaContext): RuntimeValue {
+  const s0 = () => toText(a[0]);
+  const n = (i: number, def?: number) => (a[i] === undefined ? (def ?? 0) : toNumber(a[i]));
+  switch (name) {
+    // ---- math ----
+    case "TRUNC": {
+      argCount(name, argAsts, 1, 2);
+      const f = 10 ** Math.trunc(n(1, 0));
+      return Math.trunc(Number((n(0) * f).toPrecision(15))) / f;
+    }
+    case "CURRENCY":
+      argCount(name, argAsts, 1, 2);
+      return isBlank(a[0]) ? null : toNumber(a[0]);
+
+    // ---- text ----
+    case "PROPER":
+      argCount(name, argAsts, 1, 1);
+      return s0().toLowerCase().replace(/(^|[^\p{L}\p{N}'])(\p{L})/gu, (_m, p: string, c: string) => p + c.toUpperCase());
+    case "CONTAINS":
+      argCount(name, argAsts, 2, 2);
+      return s0().includes(toText(a[1]));
+    case "CONTAINS_IGNORE_CASE":
+      argCount(name, argAsts, 2, 2);
+      return s0().toLowerCase().includes(toText(a[1]).toLowerCase());
+    case "EQUALS_IGNORE_CASE":
+      argCount(name, argAsts, 2, 2);
+      return s0().normalize("NFC").toLowerCase() === toText(a[1]).normalize("NFC").toLowerCase();
+    case "SPLIT": {
+      argCount(name, argAsts, 2, 2);
+      if (isBlank(a[0])) return [];
+      const sep = toText(a[1]);
+      return sep ? s0().split(sep) : [...s0()];
+    }
+    case "TEXT": {
+      argCount(name, argAsts, 1, 2);
+      if (isBlank(a[0])) return "";
+      const pattern = a[1] === undefined ? "" : toText(a[1]);
+      if (!pattern) return toText(a[0]);
+      if (a[0] instanceof Date) return formatDateTime(a[0], pattern);
+      if (typeof a[0] === "number" || isNumericString(a[0])) return formatNumberPattern(toNumber(a[0]), pattern);
+      const d = parseDate(a[0]);
+      return d ? formatDateTime(d, pattern) : toText(a[0]);
+    }
+    case "JSON_GET": {
+      argCount(name, argAsts, 2, 2);
+      let doc: unknown = a[0];
+      if (typeof doc === "string") {
+        try {
+          doc = JSON.parse(doc);
+        } catch {
+          throw new FormulaEvalError("#VALUE JSON_GET: not valid JSON");
+        }
+      }
+      const path = toText(a[1]);
+      const keys = path.startsWith("/")
+        ? path.slice(1).split("/").map((k) => k.replace(/~1/g, "/").replace(/~0/g, "~"))
+        : path.split(".").filter((k) => k !== "");
+      for (const k of keys) {
+        if (doc === null || typeof doc !== "object" || !Object.prototype.hasOwnProperty.call(doc, k)) return null;
+        doc = (doc as Record<string, unknown>)[k];
+      }
+      if (doc === undefined || doc === null) return null;
+      if (typeof doc === "object") return JSON.stringify(doc);
+      return doc as RuntimeValue;
+    }
+
+    // ---- dates ----
+    case "DATE": {
+      argCount(name, argAsts, 3, 3);
+      const [y, m, d] = [Math.trunc(n(0)), Math.trunc(n(1)), Math.trunc(n(2))];
+      const out = new Date(Date.UTC(y, m - 1, d));
+      if (m < 1 || m > 12 || d < 1 || out.getUTCMonth() !== m - 1) throw new FormulaEvalError("#VALUE DATE: invalid date");
+      return out;
+    }
+    case "DATETIME": {
+      argCount(name, argAsts, 1, 5);
+      const day = requireDate(a[0], name);
+      if (!day) return null;
+      const wall = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), n(1, 0), n(2, 0), n(3, 0));
+      if (a[4] === undefined || isBlank(a[4])) return new Date(wall);
+      const tz = requireTz(a[4]);
+      const guess = new Date(wall - tzOffsetMs(new Date(wall), tz));
+      return new Date(wall - tzOffsetMs(guess, tz));
+    }
+    case "DATE_DIFF": {
+      argCount(name, argAsts, 3, 3);
+      const d1 = requireDate(a[0], name);
+      const d2 = requireDate(a[1], name);
+      if (!d1 || !d2) return null;
+      return dateDiff(d2, d1, parseUnit(a[2], "d"));
+    }
+    case "DATE_TRUNC": {
+      argCount(name, argAsts, 2, 3);
+      const d = requireDate(a[0], name);
+      if (!d) return null;
+      const unit = parseUnit(a[1], "d");
+      if (a[2] === undefined || isBlank(a[2])) return new Date(startOf(d, unit));
+      const off = tzOffsetMs(d, requireTz(a[2]));
+      return new Date(startOf(new Date(d.getTime() + off), unit) - off);
+    }
+    case "PARSE_DATE": {
+      const d = evalCall("DATETIME_PARSE", argAsts.slice(0, 2), ctx);
+      return d instanceof Date ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) : d;
+    }
+    case "TO_TIMEZONE": {
+      argCount(name, argAsts, 2, 3);
+      const d = requireDate(a[0], name);
+      const tz = requireTz(a[1]);
+      if (!d) return null;
+      const local = new Date(d.getTime() + tzOffsetMs(d, tz));
+      return formatDateTime(local, a[2] === undefined ? "YYYY-MM-DD HH:mm" : toText(a[2]));
+    }
+    case "DURATION":
+      argCount(name, argAsts, 1, 3);
+      return n(0) * 3600 + n(1, 0) * 60 + n(2, 0);
+
+    // ---- arrays ----
+    case "ARRAY_FIRST": {
+      argCount(name, argAsts, 1, 1);
+      const arr = flatten(a[0]);
+      return arr.length ? arr[0]! : null;
+    }
+    case "ARRAY_LAST": {
+      argCount(name, argAsts, 1, 1);
+      const arr = flatten(a[0]);
+      return arr.length ? arr[arr.length - 1]! : null;
+    }
+    case "ARRAY_SORT": {
+      argCount(name, argAsts, 1, 2);
+      const desc = toText(a[1]).toLowerCase() === "desc";
+      const arr = [...flatten(a[0])];
+      arr.sort((x, y) => {
+        const kx = sortKey(x);
+        const ky = sortKey(y);
+        const c = typeof kx === "number" && typeof ky === "number" ? kx - ky : String(kx).localeCompare(String(ky));
+        return desc ? -c : c;
+      });
+      return arr;
+    }
+    case "ARRAY_CONTAINS":
+      argCount(name, argAsts, 2, 2);
+      return flatten(a[0]).some((v) => compare("=", v, a[1] ?? null));
+    case "REGEX_EXTRACT_ALL": {
+      argCount(name, argAsts, 2, 2);
+      const out: RuntimeValue[] = [];
+      for (const m of s0().matchAll(regexOf(a[1], "g"))) {
+        out.push(m[0]);
+        if (out.length >= 1000) break;
+      }
+      return out;
+    }
+
+    // ---- record metadata ----
+    case "ROW_NUMBER":
+      return ctx.rowNumber ?? null;
+    case "CREATED_BY":
+      return ctx.createdBy ?? null;
+    case "MODIFIED_BY":
+      return ctx.modifiedBy ?? ctx.createdBy ?? null;
     default:
       throw new FormulaEvalError(`Unknown function ${name}()`);
   }
@@ -936,6 +1179,13 @@ export const FORMULA_FUNCTIONS: readonly string[] = [
   "DATETIME_FORMAT", "DATETIME_PARSE", "DATESTR", "TIMESTR", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND",
   "WEEKDAY", "WEEKNUM", "WORKDAY", "WORKDAY_DIFF", "IS_BEFORE", "IS_AFTER", "IS_SAME", "SET_TIMEZONE",
   "SET_LOCALE", "TONOW", "FROMNOW",
+  // architecture/08 §6 catalogue names
+  "CONCAT", "PROPER", "CONTAINS", "CONTAINS_IGNORE_CASE", "EQUALS_IGNORE_CASE", "REPLACE_AT", "SPLIT", "TEXT",
+  "JSON_GET", "CURRENCY", "ROUND_UP", "ROUND_DOWN", "TRUNC", "DATE", "DATETIME", "DATE_ADD", "DATE_DIFF",
+  "DATE_TRUNC", "WORKDAY_ADD", "WORKDAYS_BETWEEN", "FORMAT_DATE", "PARSE_DATE", "PARSE_DATETIME", "TO_TIMEZONE",
+  "DURATION", "COUNT_ALL", "ARRAY_JOIN", "ARRAY_UNIQUE", "ARRAY_COMPACT", "ARRAY_FLATTEN", "ARRAY_FIRST",
+  "ARRAY_LAST", "ARRAY_SLICE", "ARRAY_SORT", "ARRAY_CONTAINS", "REGEX_TEST", "REGEX_EXTRACT_ALL", "ROW_NUMBER",
+  "MODIFIED_TIME", "CREATED_BY", "MODIFIED_BY",
 ];
 for (const f of FORMULA_FUNCTIONS) KNOWN_FUNCTIONS.add(f);
 
@@ -951,6 +1201,8 @@ export function toOutputValue(v: RuntimeValue): FormulaValue {
     return Number(v.toPrecision(15));
   }
   if (Array.isArray(v)) return flatten(v).map((x) => toOutputValue(x));
+  // Postgres jsonb rejects lone surrogates; they would fail the whole write.
+  if (typeof v === "string") return v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
   return v;
 }
 

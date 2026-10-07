@@ -90,7 +90,7 @@ export async function executeGroupQuery(
   const where: string[] = [];
   let searchFields = infos;
   if (input.viewId) {
-    const view = await loadViewForQuery(db, tableId, input.viewId);
+    const view = await loadViewForQuery(db, tableId, input.viewId, opts.user?.userId);
     if (view.filter) {
       const c = compileFilterToSql(view.filter, undefined, { ...ctx, params: p, unknownField: "ignore" });
       if (c.sql !== "TRUE") where.push(c.sql);

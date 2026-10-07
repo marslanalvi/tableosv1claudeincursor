@@ -17,10 +17,12 @@ import { NotificationsBell } from "../features/notifications/NotificationsBell.t
 import { ImportWizard } from "../features/import/ImportWizard.tsx";
 import { ExportMenu } from "../features/import/ExportMenu.tsx";
 import { ShareDialog } from "../features/share/ShareDialog.tsx";
-import { ViewsSidebar } from "../features/views/ViewsSidebar.tsx";
+import { defaultViewName, ViewsSidebar } from "../features/views/ViewsSidebar.tsx";
 import { FormsIndex } from "../features/views/FormsIndex.tsx";
+import { InterfacesPanel } from "../features/interfaces/InterfacesPanel.tsx";
 import { FieldManager } from "../features/schema/FieldManager.tsx";
-import type { ViewKind } from "../features/views/view-types.ts";
+import { useBaseRole } from "../features/grid/field-services.tsx";
+import { VIEW_CREATE_OPTIONS, type ViewKind } from "../features/views/view-types.ts";
 import { setViewsInCaches } from "../features/views/view-utils.ts";
 import { AutomationsPanel } from "../features/automations/AutomationsPanel.tsx";
 import { ConfirmDialog, Dialog, DropdownMenu, PromptDialog, uiStyles } from "../app/ui.tsx";
@@ -86,6 +88,7 @@ export function BasePage({ baseId }: { baseId: string }) {
   });
 
   const tables = baseQuery.data?.tables ?? [];
+  const { role } = useBaseRole(baseId);
   const [baseTab, setBaseTab] = useState<BaseTab>("data");
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
@@ -417,6 +420,16 @@ export function BasePage({ baseId }: { baseId: string }) {
                       table={activeTable}
                       {...(activeView ? { activeView } : {})}
                       onOpenShare={() => setShareOpen(true)}
+                      views={views}
+                      onSelectView={setActiveViewId}
+                      onCreateView={(type) => {
+                        const label = VIEW_CREATE_OPTIONS.find((o) => o.id === type)?.label ?? "View";
+                        const shared = role === undefined || role === "owner" || role === "creator" || role === "editor";
+                        createViewMutation.mutate(
+                          { type, visibility: shared ? "collaborative" : "personal", name: defaultViewName(label, views) },
+                          { onError: (err) => toast.error(err, "Could not create the view") },
+                        );
+                      }}
                       onOpenImport={() => setImportTableId(activeTable.id)}
                       onSchemaChange={() => {
                         void baseQuery.refetch();
@@ -437,23 +450,8 @@ export function BasePage({ baseId }: { baseId: string }) {
         {baseTab === "automations" ? <AutomationsPanel baseId={baseId} /> : null}
 
         {baseTab === "interfaces" ? (
-          <div className={styles.comingSoon}>
-            <div className={styles.comingSoonCard}>
-              <span className={styles.comingSoonBadge}>Coming soon</span>
-              <h1>Interfaces</h1>
-              <p>
-                Build custom dashboards and apps on top of this base’s data. The interface designer
-                isn’t available yet — use views in the Data tab, or share a form, in the meantime.
-              </p>
-              <div className={styles.comingSoonActions}>
-                <button type="button" className={uiStyles.btnPrimary} onClick={() => setBaseTab("data")}>
-                  Go to data
-                </button>
-                <button type="button" className={uiStyles.btn} onClick={() => setBaseTab("forms")}>
-                  View forms
-                </button>
-              </div>
-            </div>
+          <div className={styles.interfacesTab}>
+            <InterfacesPanel baseId={baseId} />
           </div>
         ) : null}
 

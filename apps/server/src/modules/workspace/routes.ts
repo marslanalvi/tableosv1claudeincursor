@@ -4,10 +4,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../../lib/app-context.js";
 import { parsePid, pid } from "../../lib/public-ids.js";
-import { handleRouteError, notFound, validationProblem } from "../../http/errors.js";
+import { ApiError, handleRouteError, notFound, validationProblem } from "../../http/errors.js";
 import { userCanAccessWorkspace } from "../access/helpers.js";
-import { assertCan } from "../access/assert.js";
-import { compileForUser, compileForWorkspace } from "../access/compile.js";
+import { compileForUser } from "../access/compile.js";
+import { getWorkspaceAccess } from "../access/workspace-access.js";
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -17,6 +17,15 @@ export async function registerWorkspaceRoutes(
   app: FastifyInstance,
   ctx: AppContext,
 ): Promise<void> {
+  /** `workspace.manage` (rename, delete) is owner-only (architecture/19 §20.2.2). */
+  async function assertWorkspaceOwner(userId: string, workspaceId: string): Promise<void> {
+    const access = await getWorkspaceAccess(ctx.db, userId, workspaceId);
+    if (!access?.workspaceRole) throw new ApiError(404, "NOT_FOUND", "Workspace not found");
+    if (access.workspaceRole !== "owner") {
+      throw new ApiError(403, "FORBIDDEN", "Only workspace owners can rename or delete a workspace");
+    }
+  }
+
   app.get("/v1/workspaces", async (request, reply) => {
     try {
       const user = request.user;
@@ -31,6 +40,16 @@ export async function registerWorkspaceRoutes(
         INNER JOIN core.organization_members m
           ON m.org_id = w.org_id AND m.user_id = ${user.id} AND m.status = 'active'
         WHERE w.deleted_at IS NULL AND w.status = 'active'
+          AND (
+            m.role IN ('owner', 'admin')
+            OR EXISTS (
+              SELECT 1 FROM core.access_grants g
+              WHERE g.principal_type = 'user' AND g.principal_id = ${user.id}
+                AND g.workspace_id = w.id
+                AND g.resource_type IN ('workspace', 'base')
+                AND (g.expires_at IS NULL OR g.expires_at > now())
+            )
+          )
         ORDER BY w.created_at ASC
       `.execute(ctx.db);
 
@@ -117,8 +136,7 @@ export async function registerWorkspaceRoutes(
           notFound(request, reply, "Workspace not found");
           return;
         }
-        const snapshot = await compileForWorkspace(ctx.db, user.id, workspaceId);
-        assertCan(snapshot, "base.manage_schema");
+        await assertWorkspaceOwner(user.id, workspaceId);
         await sql`
           UPDATE core.workspaces SET name = ${body.name}, updated_at = now()
           WHERE id = ${workspaceId}
@@ -147,8 +165,7 @@ export async function registerWorkspaceRoutes(
           notFound(request, reply, "Workspace not found");
           return;
         }
-        const snapshot = await compileForWorkspace(ctx.db, user.id, workspaceId);
-        assertCan(snapshot, "base.manage_members");
+        await assertWorkspaceOwner(user.id, workspaceId);
         await ctx.db.transaction().execute(async (trx) => {
           await sql`
             UPDATE core.workspaces
@@ -178,8 +195,9 @@ export async function registerWorkspaceRoutes(
           return;
         }
         const workspaceId = parsePid(request.params.workspaceId, "wsp");
-        const access = await userCanAccessWorkspace(ctx.db, user.id, workspaceId);
-        if (!access.ok) {
+        const access = await getWorkspaceAccess(ctx.db, user.id, workspaceId);
+        // Base-only guests are org members but not workspace members.
+        if (!access?.workspaceRole) {
           notFound(request, reply, "Workspace not found");
           return;
         }
@@ -219,7 +237,9 @@ export async function registerWorkspaceRoutes(
           /* invitations schema may be mid-migration; members still listed */
         }
         void reply.send({
-          members: rows.rows.map((r) => ({
+          members: rows.rows
+            .filter((r) => r.ws_role || r.org_role === "owner" || r.org_role === "admin")
+            .map((r) => ({
             id: pid("usr", r.id),
             name: r.display_name || r.email,
             email: r.email,

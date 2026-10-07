@@ -173,6 +173,7 @@ export function conflictProblem(
 const MESSAGE_CODE_MAP: Record<string, { status: number; code: ApiErrorCode; detail: string }> = {
   INVALID_FILTER_AST: { status: 422, code: "VALIDATION_FAILED", detail: "Invalid filter expression" },
   FILTER_DEPTH_EXCEEDED: { status: 422, code: "VALIDATION_FAILED", detail: "Filter is nested too deeply" },
+  FILTER_TOO_LARGE: { status: 422, code: "VALIDATION_FAILED", detail: "Filter has too many conditions (max 200)" },
   INVALID_CURSOR: { status: 422, code: "VALIDATION_FAILED", detail: "Invalid or expired pagination cursor" },
   INVALID_SORT: { status: 422, code: "VALIDATION_FAILED", detail: "Invalid sort specification" },
   LINK_CARDINALITY: { status: 422, code: "VALIDATION_FAILED", detail: "This link field only allows a single linked record" },

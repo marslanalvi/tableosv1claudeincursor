@@ -55,11 +55,18 @@ export interface LoadedView {
 }
 
 /** Load a view of `tableId` (`viw_` or uuid). Throws QueryNotFoundError. */
-export async function loadViewForQuery(db: TabulaDb, tableId: string, viewId: string): Promise<LoadedView> {
+export async function loadViewForQuery(
+  db: TabulaDb,
+  tableId: string,
+  viewId: string,
+  /** When given, other users' personal views are not found. */
+  userId?: string,
+): Promise<LoadedView> {
   const id = viewId.startsWith("viw_") ? parsePid(viewId, "viw") : viewId;
   const r = await sql<{ id: string; config: Record<string, unknown> }>`
     SELECT id, config FROM data.views
     WHERE id = ${id}::uuid AND table_id = ${tableId} AND deleted_at IS NULL
+      AND (${userId ?? null}::uuid IS NULL OR visibility <> 'personal' OR owner_user_id = ${userId ?? null}::uuid)
   `.execute(db);
   const v = r.rows[0];
   if (!v) throw new QueryNotFoundError("View not found");
@@ -108,7 +115,7 @@ export async function executeRecordQuery(
   let sort = req.sort;
   let searchFields: SqlFieldInfo[] = infos;
   if (req.viewId) {
-    const view = await loadViewForQuery(db, tableId, req.viewId);
+    const view = await loadViewForQuery(db, tableId, req.viewId, opts.user?.userId);
     viewFilter = view.filter;
     if (!sort || sort.length === 0) {
       // Drop saved sorts on deleted fields instead of failing the view.

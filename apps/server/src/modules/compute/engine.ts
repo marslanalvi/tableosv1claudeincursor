@@ -546,6 +546,8 @@ class ComputeRun {
               else throw e;
             }
           }
+          const modifier = row.updatedBy ?? row.createdBy;
+          await this.userNames([row.createdBy, modifier].filter((x): x is string => !!x));
           const value = evaluateFormula(ast, {
             getField: (ref) => {
               const v = resolved.get(ref);
@@ -555,6 +557,9 @@ class ComputeRun {
             recordId: pid("rec", row.id),
             createdTime: row.createdAt,
             lastModifiedTime: row.updatedAt,
+            rowNumber: row.rowNumber,
+            ...(row.createdBy ? { createdBy: this.users.get(row.createdBy) ?? "" } : {}),
+            ...(modifier ? { modifiedBy: this.users.get(modifier) ?? "" } : {}),
             now: this.now,
           });
           return { value: castResult(value, f.config["resultType"]) };
@@ -718,7 +723,12 @@ export function aggregate(agg: string, values: RuntimeValue[], linkedCount: numb
     case "concat":
       return nonEmpty.map((v) => plainText(v)).join(", ") || undefined;
     case "and":
-      return nonEmpty.length > 0 && nonEmpty.every((v) => v === true || (toNum(v) ?? (v ? 1 : 0)) !== 0);
+      // An empty linked value (e.g. an unchecked checkbox) counts as false.
+      return (
+        nonEmpty.length > 0 &&
+        nonEmpty.length >= Math.max(values.length, linkedCount) &&
+        nonEmpty.every((v) => v === true || (toNum(v) ?? (v ? 1 : 0)) !== 0)
+      );
     case "or":
       return nonEmpty.some((v) => v === true || (toNum(v) ?? (v ? 1 : 0)) !== 0);
     case "unique": {

@@ -343,6 +343,7 @@ export async function updateFieldInTx(
     return { field, tableIds: [...tableIds], converted };
   }
   if (!isFieldTypeKey(newType)) throw new ApiError(422, "VALIDATION_FAILED", `Unknown field type "${newType}"`);
+  if (typeChanged) await assertNotLastRecordIdField(ctx.trx, tableId, field);
 
   const tableFields = await loadTableFieldRows(ctx.trx, tableId);
   // Merge partial config onto the existing one when the type is unchanged.
@@ -377,6 +378,35 @@ export async function updateFieldInTx(
     const allow = newConfig["allowMultiple"] !== false;
     await sql`UPDATE data.link_relations SET allow_multiple_a = ${allow} WHERE a_field_id = ${fieldId}`.execute(ctx.trx);
     await sql`UPDATE data.link_relations SET allow_multiple_b = ${allow} WHERE b_field_id = ${fieldId}`.execute(ctx.trx);
+  } else if (field.type === "single_select" || field.type === "multi_select") {
+    // Deleted options are cleared from cells (architecture/28 E025).
+    const kept = new Set(optionsOf(newConfig).map((o) => o.id));
+    const removed = optionsOf(field.config).map((o) => o.id).filter((id) => !kept.has(id));
+    if (removed.length) {
+      const slot = String(field.slot);
+      if (field.type === "single_select") {
+        await sql`
+          UPDATE data.records SET cells = cells - ${slot}, version = version + 1, updated_at = now()
+          WHERE table_id = ${tableId} AND cells ->> ${slot} = ANY(${removed}::text[])
+        `.execute(ctx.trx);
+      } else {
+        await sql`
+          UPDATE data.records r
+          SET cells = CASE WHEN v.kept = '[]'::jsonb THEN r.cells - ${slot}
+                           ELSE jsonb_set(r.cells, ARRAY[${slot}], v.kept) END,
+              version = r.version + 1, updated_at = now()
+          FROM (
+            SELECT id, COALESCE(
+              (SELECT jsonb_agg(e) FROM jsonb_array_elements(cells -> ${slot}) e
+               WHERE NOT (e #>> '{}') = ANY(${removed}::text[])), '[]'::jsonb) AS kept
+            FROM data.records
+            WHERE table_id = ${tableId} AND jsonb_typeof(cells -> ${slot}) = 'array'
+              AND (cells -> ${slot}) ?| ${removed}::text[]
+          ) v
+          WHERE r.table_id = ${tableId} AND r.id = v.id
+        `.execute(ctx.trx);
+      }
+    }
   }
 
   await sql`
@@ -626,6 +656,22 @@ async function convertFieldType(
 // Delete
 // ---------------------------------------------------------------------------
 
+/** Every table keeps one Record ID field; users hide it per view instead. */
+async function assertNotLastRecordIdField(trx: DbTrx, tableId: string, field: { id: string; type: string }): Promise<void> {
+  if (field.type !== "record_id") return;
+  const others = await sql<{ n: number }>`
+    SELECT count(*)::int AS n FROM data.fields
+    WHERE table_id = ${tableId} AND type = 'record_id' AND deleted_at IS NULL AND id <> ${field.id}
+  `.execute(trx);
+  if ((others.rows[0]?.n ?? 0) === 0) {
+    throw new ApiError(
+      409,
+      "RECORD_ID_REQUIRED",
+      "Every table keeps a Record ID field. Hide it from the view's Fields menu instead.",
+    );
+  }
+}
+
 export async function deleteFieldInTx(
   ctx: SchemaOpContext,
   tableId: string,
@@ -637,6 +683,7 @@ export async function deleteFieldInTx(
   if (table?.primaryFieldId === fieldId) {
     throw new ApiError(409, "PRIMARY_FIELD_REQUIRED", "The primary field cannot be deleted. Make another field primary first.");
   }
+  await assertNotLastRecordIdField(ctx.trx, tableId, field);
   const tableIds = new Set([tableId]);
   const deps = await dependentsOf(ctx.trx, [fieldId]);
   let inverseFieldId: string | null = null;

@@ -244,10 +244,12 @@
   gap: 8px;
 }
 
-.formsTab {
+.formsTab,
+.interfacesTab {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  overflow: hidden;
 }
 
 @media (max-width: 767px) {

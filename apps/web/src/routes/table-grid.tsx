@@ -116,12 +116,18 @@ export function TableGridPage({
   manageFieldsSignal = 0,
   onOpenShare,
   onSchemaChange,
+  views,
+  onSelectView,
+  onCreateView,
 }: {
   baseId: string;
   table: TableDto;
   activeView?: ViewDto;
   manageFieldsSignal?: number;
   onOpenShare?: () => void;
+  views?: ViewDto[];
+  onSelectView?: (viewId: string) => void;
+  onCreateView?: (type: ViewKind) => void;
   /** Import lives in F's Tools menu (CONTRACTS §10). */
   onOpenImport?: () => void;
   onSchemaChange: () => void;
@@ -188,6 +194,9 @@ export function TableGridPage({
         onSearchChange={setSearch}
         saveError={saveError}
         {...(onOpenShare ? { onShare: onOpenShare } : {})}
+        {...(views ? { views } : {})}
+        {...(onSelectView ? { onSelectView } : {})}
+        {...(onCreateView ? { onCreateView } : {})}
         {...(count !== undefined && viewKind !== "grid" ? { recordCount: count } : {})}
       />
 

@@ -21,7 +21,7 @@ const opt = (label: string, color: string) => ({
 
 /**
  * Creates an Airtable-style starter table: Name (primary), Notes, Assignee,
- * Status (Todo / In progress / Done), Attachments, a default grid view and
+ * Status (Todo / In progress / Done), Attachments, Record ID, a default grid view and
  * three empty records. Keeps `tables.record_count` / `base_runtime.record_count`
  * in sync.
  */
@@ -65,6 +65,7 @@ export async function bootstrapDefaultTable(
       config: { options: [opt("Todo", "red"), opt("In progress", "yellow"), opt("Done", "green")] },
     },
     { name: "Attachments", type: "attachment", config: {} },
+    { name: "Record ID", type: "record_id", config: {} },
   ];
   const fieldIds = fields.map(() => generateUuidV7());
   const fieldKeys = keysBetween(null, null, fields.length);

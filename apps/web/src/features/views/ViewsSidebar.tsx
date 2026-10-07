@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ViewDto } from "../../lib/api.ts";
 import { viewsApi, type ViewVisibility, type ViewWire } from "../../lib/api-areas/views.ts";
 import { toast } from "../../app/toast.tsx";
-import { FloatingPanel } from "../base/floating.tsx";
 import { useBaseRole } from "../grid/field-services.tsx";
 import { VIEW_CREATE_OPTIONS, type ViewKind } from "./view-types.ts";
 import { patchViewInCaches, setViewsInCaches } from "./view-utils.ts";
@@ -30,6 +29,24 @@ export function defaultViewName(label: string, views: { name: string }[]): strin
   if (!names.has(l) && !names.has(`${l} view`)) return label;
   for (let i = 2; ; i += 1) {
     if (!names.has(`${l} ${i}`) && !names.has(`${l} view ${i}`)) return `${label} ${i}`;
+  }
+}
+
+const CREATE_OPEN_KEY = "tableos.views.createOpen";
+
+function readCreateOpen(): boolean {
+  try {
+    return localStorage.getItem(CREATE_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeCreateOpen(open: boolean): void {
+  try {
+    localStorage.setItem(CREATE_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    /* storage unavailable */
   }
 }
 
@@ -75,7 +92,8 @@ export function ViewsSidebar({
   const canCreatePersonal = role !== "viewer";
 
   const [query, setQuery] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(() => readCreateOpen());
+  const focusCreateRef = useRef(false);
   const [newVisibility, setNewVisibility] = useState<NewVisibility>("collaborative");
   const [creating, setCreating] = useState<ViewKind | null>(null);
   const [menuViewId, setMenuViewId] = useState<string | null>(null);
@@ -116,7 +134,11 @@ export function ViewsSidebar({
   }, [menuViewId]);
 
   useEffect(() => {
-    if (createOpen) createMenuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    if (!createOpen || !focusCreateRef.current) return;
+    focusCreateRef.current = false;
+    const first = createMenuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)");
+    first?.scrollIntoView({ block: "nearest" });
+    first?.focus();
   }, [createOpen]);
 
   const setError = (err: unknown) => toast.error(err);
@@ -233,9 +255,18 @@ export function ViewsSidebar({
     window.setTimeout(() => setFlashId(null), 1600);
   }
 
+  function setCreateSection(open: boolean, focus = open) {
+    if (open && !createOpen) setNewVisibility(canCreateShared ? "collaborative" : "personal");
+    focusCreateRef.current = focus;
+    setCreateOpen(open);
+    writeCreateOpen(open);
+    if (open && createOpen && focus) {
+      createMenuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    }
+  }
+
   function openCreate() {
-    if (!createOpen) setNewVisibility(canCreateShared ? "collaborative" : "personal");
-    setCreateOpen((o) => !o);
+    setCreateSection(!createOpen);
   }
 
   /** Airtable: picking a type creates the view at once, selects it and starts renaming it. */
@@ -246,7 +277,6 @@ export function ViewsSidebar({
     setCreating(type);
     try {
       const res = (await onCreateView(type, visibility, name)) as { view?: ViewWire } | undefined;
-      setCreateOpen(false);
       const created = res?.view;
       if (created) {
         const section: Section = created.visibility === "personal" ? "personal" : "collaborative";
@@ -498,6 +528,16 @@ export function ViewsSidebar({
           placeholder="Find a view"
           aria-label="Find a view"
         />
+        <button
+          type="button"
+          className={styles.newViewBtn}
+          aria-label="Create a new view"
+          title={canCreatePersonal ? "Create a new view" : "Viewers can't create views"}
+          disabled={!canCreatePersonal}
+          onClick={() => setCreateSection(true)}
+        >
+          +
+        </button>
       </div>
 
       <div className={styles.lists}>
@@ -510,8 +550,8 @@ export function ViewsSidebar({
           ref={createBtnRef}
           type="button"
           className={styles.createBtn}
-          aria-haspopup="menu"
           aria-expanded={createOpen}
+          aria-controls="views-create-section"
           disabled={!canCreatePersonal}
           title={canCreatePersonal ? "Create a view" : "Viewers can't create views"}
           onClick={openCreate}
@@ -519,13 +559,8 @@ export function ViewsSidebar({
           <span>Create…</span>
           <span aria-hidden>{createOpen ? "▾" : "▴"}</span>
         </button>
-        {createOpen ? (
-          <FloatingPanel
-            anchorRef={createBtnRef}
-            placement="top-start"
-            className={styles.createMenu}
-            onClose={() => setCreateOpen(false)}
-          >
+        {createOpen && canCreatePersonal ? (
+          <div id="views-create-section" className={styles.createInline}>
             <div ref={createMenuRef}>
               <div className={styles.createHead}>
                 <div className={styles.segmented} role="radiogroup" aria-label="Who can see the new view">
@@ -588,7 +623,7 @@ export function ViewsSidebar({
                 ))}
               </div>
             </div>
-          </FloatingPanel>
+          </div>
         ) : null}
       </div>
     </aside>

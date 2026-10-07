@@ -1131,3 +1131,9 @@ apps/server/src/modules/views/
 | Error codes | `VIEW_CONFIG_INVALID`, `VIEW_CONFIG_CONFLICT`, `VIEW_CONFIG_FROM_FUTURE`, `VIEW_CONFIG_DANGLING`, `VIEW_LOCKED`, `VIEW_IS_DEFAULT`, `VIEW_IN_USE`, `INVALID_CURSOR`, `CURSOR_EXPIRED`, `QUERY_TIMEOUT`, `FORM_CLOSED`, `FORM_OPTION_NOT_ALLOWED`, `FORM_OWNER_ACCESS_LOST`, `CAPTCHA_REQUIRED`, `CAPTCHA_FAILED` | Stable machine codes |
 | Internal events (not public) | `view.record_entered`, `view.record_left` | Emitted by the membership maintainer to the automation trigger matcher |
 | Constants | `VIEW_ORDER_LIST_MAX = 250000`; `VIEW_PATCH_FORWARD_MAX_CHANGES = 2000` | §8.3, §12 |
+
+## 20. TableOS implementation notes (2026-10)
+
+* **Fields panel.** The toolbar button and popover previously labelled "Hide fields" are now called **Fields** (button shows `Fields · N hidden` when any are hidden). It lists every field, including the system **Record ID** field, and each can be shown or hidden per view.
+* **Creating views is always visible.** Three entry points: the toolbar view-name button opens a switcher listing the table's views plus a "Create a view" section (Grid, Form, Calendar, Gallery, Kanban, Timeline, List, Gantt); the views sidebar has a `+` button next to "Find a view"; and the sidebar's **Create** list renders inline (its open/closed state persists in `localStorage`). New views are collaborative for owners/creators/editors and personal otherwise.
+* **Forms tab.** The base-level Forms tab is a two-pane studio: a list of every form view across tables (filter by table, search, "+ New form") and the full form builder + live preview on the right, with "Copy public link", "Open in Data" and "Delete form". It uses the same form view config as §16.

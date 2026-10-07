@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { DropdownMenu } from "../../app/ui.tsx";
 import type { FieldDto, FilterAst, TableDto, ViewDto } from "../../lib/api.ts";
 import type { RowHeight, SortSpec, ViewConfig } from "../../lib/api-areas/views.ts";
 import { FilterGroupEditor } from "./FilterBuilder.tsx";
@@ -172,7 +173,7 @@ function HideFieldsPanel({
   config,
   update,
   disabled,
-  title = "Hide fields",
+  title = "Fields",
 }: {
   table: TableDto;
   config: ViewConfig;
@@ -590,6 +591,9 @@ export function ViewToolbar({
   onShare,
   recordCount,
   saveError,
+  views,
+  onSelectView,
+  onCreateView,
 }: {
   baseId: string;
   table: TableDto;
@@ -603,6 +607,10 @@ export function ViewToolbar({
   onShare?: () => void;
   recordCount?: number;
   saveError?: string | null;
+  /** View switcher (view name ▾): the table's views and one-click creation. */
+  views?: ViewDto[];
+  onSelectView?: (viewId: string) => void;
+  onCreateView?: (type: ViewKind) => void;
 }) {
   const [open, setOpen] = useState<PanelId>(null);
   const fields = useMemo(() => orderedFields(table, config), [table, config]);
@@ -623,10 +631,64 @@ export function ViewToolbar({
     <div className={styles.toolbarShell}>
       <div className={styles.toolbar} role="toolbar" aria-label="View toolbar">
         <div className={styles.viewTitle}>
-          <span className={styles.viewTitleIcon} style={{ color: meta?.color }} aria-hidden>
-            {meta?.icon ?? "▦"}
-          </span>
-          <span className={styles.viewName}>{view?.name ?? "Grid view"}</span>
+          {onCreateView || onSelectView ? (
+            <DropdownMenu
+              trigger={({ open: menuOpen, toggle }) => (
+                <button
+                  type="button"
+                  className={styles.viewSwitcherBtn}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  title="Switch or create a view"
+                  onClick={toggle}
+                >
+                  <span className={styles.viewTitleIcon} style={{ color: meta?.color }} aria-hidden>
+                    {meta?.icon ?? "▦"}
+                  </span>
+                  <span className={styles.viewName}>{view?.name ?? "Grid view"}</span>
+                  <span aria-hidden className={styles.viewSwitcherCaret}>
+                    ▾
+                  </span>
+                </button>
+              )}
+              items={[
+                ...(onSelectView && views?.length
+                  ? [
+                      { key: "h-views", heading: true, label: "Views" },
+                      ...views.map((v) => {
+                        const m = VIEW_CREATE_OPTIONS.find((o) => o.id === v.type);
+                        return {
+                          key: `v-${v.id}`,
+                          icon: <span style={{ color: m?.color }}>{m?.icon ?? "▦"}</span>,
+                          label: v.name,
+                          ...(v.id === view?.id ? { hint: "✓" } : {}),
+                          onSelect: () => onSelectView(v.id),
+                        };
+                      }),
+                    ]
+                  : []),
+                ...(onCreateView
+                  ? [
+                      { key: "h-create", heading: true, label: "Create a view", separatorBefore: Boolean(views?.length) },
+                      ...VIEW_CREATE_OPTIONS.map((o) => ({
+                        key: `c-${o.id}`,
+                        icon: <span style={{ color: o.color }}>{o.icon}</span>,
+                        label: o.label,
+                        hint: "+",
+                        onSelect: () => onCreateView(o.id),
+                      })),
+                    ]
+                  : []),
+              ]}
+            />
+          ) : (
+            <>
+              <span className={styles.viewTitleIcon} style={{ color: meta?.color }} aria-hidden>
+                {meta?.icon ?? "▦"}
+              </span>
+              <span className={styles.viewName}>{view?.name ?? "Grid view"}</span>
+            </>
+          )}
           {view?.visibility === "locked" ? (
             <span className={styles.lockBadge} title="Locked view">
               🔒 Locked
@@ -643,13 +705,13 @@ export function ViewToolbar({
                 open={open}
                 setOpen={setOpen}
                 icon="◐"
-                label={kind === "grid" ? "Hide fields" : "Customize cards"}
-                activeLabel={`${hiddenCount} hidden field${hiddenCount === 1 ? "" : "s"}`}
+                label={kind === "grid" ? "Fields" : "Customize cards"}
+                activeLabel={kind === "grid" ? `Fields · ${hiddenCount} hidden` : `${hiddenCount} hidden field${hiddenCount === 1 ? "" : "s"}`}
                 active={hiddenCount > 0}
                 tone="blue"
                 width={320}
               >
-                <HideFieldsPanel table={table} config={config} update={update} disabled={disabled} title={kind === "grid" ? "Hide fields" : "Fields shown on cards"} />
+                <HideFieldsPanel table={table} config={config} update={update} disabled={disabled} title={kind === "grid" ? "Fields" : "Fields shown on cards"} />
               </ToolbarButton>
             ) : null}
             <ToolbarButton

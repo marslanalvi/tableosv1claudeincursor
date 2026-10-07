@@ -963,3 +963,36 @@ Mechanics: on `field.deleted` / `table.deleted` / `view.deleted`, a consumer fin
 | Endpoints (31) | `…/pages/{pag}:resolve`, `…/elements/{elm}:aggregate`, `:options`, `:runAction`, `:submit`, `…/layout:ops`, `/v1/interfaces/{itf}/…` alias | Runtime & builder |
 | Error codes | `ELEMENT_NOT_FOUND`, `ELEMENT_CONFIG_INVALID`, `RECORD_NOT_IN_SCOPE`, `WRITE_WOULD_LEAVE_SCOPE`, `INTERFACE_VERSION_CHANGED`, `INTERFACE_UNPUBLISHED`, `FIELD_NOT_EDITABLE` (shared) | |
 | Org policy | embed allow-list extensions, `interfaces.publicShare` toggle | §11.4 |
+
+## 18. TableOS implementation status (MVP, 2026-10)
+
+What is built today, and where it deliberately differs from §1–§17.
+
+**Storage** (`packages/db/migrations/0066_interfaces.sql`): `data.interfaces` (draft revision, published version pointer, `status` ∈ `draft_only | published | unpublished`, soft delete), `data.interface_pages` (`kind`, `layout` jsonb, `page_revision`, `order_key`) and `data.interface_versions` (immutable snapshot of all pages per publish, unique `(interface_id, version_no)`). Public ids use the `itf_` / `pag_` prefixes over UUIDv7.
+
+**Page model** (`apps/server/src/modules/interfaces/model.ts`): one section (`sec_main`) with a 12-column flow layout (`lg.w` = width, `x/y` are packed by the builder). Element types: `text`, `divider`, `metric`, `chart` (bar / line / pie / donut), `table` (grid), `record_list`, `gallery`, `record_detail` (bound to the record selected in another element), `form` (create mode) and `button` (`open_url` limited to `https:`/`mailto:`/`tel:`, or `navigate` to a page). Element ids are opaque `elm_…` strings minted by the builder (not UUID public ids).
+
+**API** (`apps/server/src/modules/interfaces/routes.ts`, all under `/v1/bases/:baseId/interfaces`):
+
+| Method + path | Purpose |
+|---|---|
+| `GET /` , `POST /` | List (builders see drafts; others only published) / create with optional template pages |
+| `GET /:itf`, `PATCH /:itf`, `DELETE /:itf` | Draft detail, rename, soft delete |
+| `POST /:itf/pages`, `PATCH /:itf/pages/:pag`, `DELETE …`, `POST /:itf/pages/reorder` | Page CRUD. `PATCH` takes `expectedRevision` → `409 PAGE_REVISION_CONFLICT`; last page → `409 LAST_PAGE` |
+| `POST /:itf/publish` | Validates every page (§16 reference diagnostics). Errors → `422 INTERFACE_INVALID` with `meta.diagnostics`; otherwise writes a new version snapshot |
+| `POST /:itf/unpublish`, `GET /:itf/versions`, `POST /:itf/versions/:n/revert` | Unpublish (runtime → `410`), history, restore a version into the draft (does not republish) |
+| `GET /:itf/runtime` | Published snapshot for consumers |
+| `POST …/elements/:elm/query` | Records for grid / list / gallery / record detail — server applies the element's table, view, filter and sort, and projects **only the element's fields** (§11.2). `record_detail` re-checks the selected record through the source element's filter (`RECORD_NOT_IN_SCOPE`) |
+| `POST …/elements/:elm/aggregate` | Metric value / chart points computed server-side with the element's filter (§10) |
+
+Element `query`/`aggregate` are read-only POSTs and are exempt from idempotency storage. `draft: true` (builders only) reads the saved draft; otherwise the published snapshot is used, so viewers never see unpublished config.
+
+**Builder** (`apps/web/src/features/interfaces/`): Interfaces tab with an interface list, page tabs, **Edit / Preview / Published** modes, a palette of the element types above, an inspector per element (title, width, table, base view, filter via the shared filter builder, field picker with order + editable/required flags, chart/metric settings, button actions), templates (Dashboard, Record review, Form, Blank), debounced autosave with `expectedRevision`, Publish with diagnostics dialog, version history with restore, unpublish, rename/delete interface and pages.
+
+**Deviations from the full design (tracked for later):**
+
+* Consumers must be base members; interface-only users, interface share links and per-interface permissions (§7) are not built. Writes from record details and forms go through the normal records API with base permissions.
+* The runtime snapshot (including element config) is sent to base members; config is not stripped per role.
+* No Redis caching (`itfv:` / `iagg:`) or realtime invalidation of aggregates; the client refetches on revision change and every 15 s staleness window.
+* Single section, flow layout (no free-form drag/resize grid, no breakpoints other than a mobile stack).
+* Record context limited to `selected_in_element`; `page_record`, `linked_from_page_record` and current-user filters (§6) are not built.

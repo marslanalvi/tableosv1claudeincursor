@@ -21,6 +21,7 @@ import { registerWave4Routes } from "../modules/wave4/routes.js";
 import { registerBillingRoutes } from "../modules/billing/routes.js";
 import { registerFeatureFlagRoutes } from "../modules/feature-flags/routes.js";
 import { registerAutomationsRoutes } from "../modules/automations/routes.js";
+import { registerInterfaceRoutes } from "../modules/interfaces/routes.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { TabulaErrorCodes, createTabulaError } from "@tabula/types";
 import { internalErrorProblem, problemFromError } from "./errors.js";
@@ -157,6 +158,7 @@ export async function buildFastify(ctx: AppContext) {
   await registerBillingRoutes(app, ctx);
   await registerFeatureFlagRoutes(app, ctx);
   await registerAutomationsRoutes(app, ctx);
+  await registerInterfaceRoutes(app, ctx);
 
   app.setNotFoundHandler((request, reply) => {
     sendProblem(
