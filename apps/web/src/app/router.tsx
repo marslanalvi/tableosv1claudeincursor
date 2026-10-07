@@ -16,6 +16,8 @@ import { SignupPage } from "../routes/signup.tsx";
 import { HomePage } from "../routes/home.tsx";
 import { BasePage } from "../routes/base.tsx";
 import { ContactsPage } from "../routes/contacts.tsx";
+import { AccountPage } from "../features/account/AccountPage.tsx";
+import { AcceptInvite } from "../features/account/AcceptInvite.tsx";
 
 function currentPath(): string {
   if (typeof window === "undefined") return "/";
@@ -139,12 +141,69 @@ const contactsRoute = createRoute({
   },
 });
 
+const accountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/account",
+  beforeLoad: async () => {
+    const me = await ensureAuth();
+    return { me };
+  },
+  component: function AccountRouteComponent() {
+    const navigate = accountRoute.useNavigate();
+    return (
+      <AccountPage
+        onBack={() => {
+          if (window.history.length > 1) window.history.back();
+          else void navigate({ to: "/" });
+        }}
+      />
+    );
+  },
+});
+
+/** Public: signed-out visitors see the invitation and are sent to log in. */
+const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invite/$token",
+  component: function InviteRouteComponent() {
+    const { token } = inviteRoute.useParams();
+    const navigate = inviteRoute.useNavigate();
+    return (
+      <AcceptInvite
+        token={token}
+        onDone={({ baseId }) => {
+          if (baseId) void navigate({ to: "/bases/$baseId", params: { baseId } });
+          else void navigate({ to: "/" });
+        }}
+        onSignIn={() =>
+          void navigate({ to: "/login", search: { next: `/invite/${encodeURIComponent(token)}` } })
+        }
+      />
+    );
+  },
+});
+
+/** Older links used `/invite?token=…`. */
+const legacyInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invite",
+  validateSearch: (search: Record<string, unknown>): { token?: string } =>
+    typeof search.token === "string" ? { token: search.token } : {},
+  beforeLoad: ({ search }) => {
+    if (search.token) throw redirect({ to: "/invite/$token", params: { token: search.token } });
+    throw redirect({ to: "/" });
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   signupRoute,
   homeRoute,
   baseRoute,
   contactsRoute,
+  accountRoute,
+  inviteRoute,
+  legacyInviteRoute,
 ]);
 
 export const router = createRouter({
@@ -164,7 +223,7 @@ let redirecting = false;
 setUnauthorizedHandler(() => {
   if (redirecting) return;
   const path = currentPath();
-  if (path.startsWith("/login") || path.startsWith("/signup")) return;
+  if (path.startsWith("/login") || path.startsWith("/signup") || path.startsWith("/invite")) return;
   redirecting = true;
   queryClient.removeQueries({ queryKey: authQueryKey });
   void router

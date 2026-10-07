@@ -224,6 +224,19 @@ export function BasePage({ baseId }: { baseId: string }) {
     onError: (err) => toast.error(err, "Could not delete base"),
   });
 
+  // FieldManager only handles Escape while focus is inside it. Capture phase so
+  // nested field/confirm dialogs are still in the DOM when we count them.
+  useEffect(() => {
+    if (!fieldsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelectorAll('[role="dialog"], [role="alertdialog"]').length > 1) return;
+      setFieldsOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [fieldsOpen]);
+
   // Stable: BaseSessionProvider keeps it in a ref anyway.
   const onResync = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["bases", baseId] });

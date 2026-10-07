@@ -177,7 +177,7 @@ function MembersDialog({
       setEmail("");
       if (res.invitation.acceptToken) {
         setInviteLink(
-          `${window.location.origin}/invite?token=${encodeURIComponent(res.invitation.acceptToken)}`,
+          `${window.location.origin}/invite/${encodeURIComponent(res.invitation.acceptToken)}`,
         );
       }
       void queryClient.invalidateQueries({ queryKey: ["workspaces", workspace.id, "members"] });

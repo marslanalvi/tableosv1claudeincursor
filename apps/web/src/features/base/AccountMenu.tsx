@@ -36,10 +36,18 @@ export function AccountMenu() {
           ),
         },
         {
+          key: "account",
+          label: "Account",
+          icon: "☺",
+          separatorBefore: true,
+          onSelect: () => {
+            void router.navigate({ to: "/account" });
+          },
+        },
+        {
           key: "home",
           label: "All workspaces",
           icon: "⌂",
-          separatorBefore: true,
           onSelect: () => {
             void router.navigate({ to: "/" });
           },
