@@ -503,7 +503,12 @@ export function BasePage({ baseId }: { baseId: string }) {
         </Dialog>
       ) : null}
       {fieldsOpen && activeTable ? (
-        <FieldManager baseId={baseId} table={activeTable} onClose={() => setFieldsOpen(false)} />
+        <FieldManager
+          baseId={baseId}
+          table={activeTable}
+          {...(activeView?.id ? { viewId: activeView.id } : {})}
+          onClose={() => setFieldsOpen(false)}
+        />
       ) : null}
       {trashOpen ? <TrashDialog baseId={baseId} onClose={() => setTrashOpen(false)} /> : null}
       {baseDialog === "rename" ? (
