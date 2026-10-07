@@ -1,43 +1,106 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type ViewDto } from "../lib/api.ts";
-import { BaseSessionProvider } from "../features/base/BaseSessionProvider.tsx";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+} from "react";
+import { api, ApiProblemError, type ViewDto } from "../lib/api.ts";
+import { shellApi } from "../lib/api-areas/shell.ts";
+import {
+  BaseSessionProvider,
+  useBaseSession,
+} from "../features/base/BaseSessionProvider.tsx";
 import { PresenceAvatars } from "../features/base/PresenceAvatars.tsx";
 import { ToolsMenu } from "../features/base/ToolsMenu.tsx";
+import { TableTabs } from "../features/base/TableTabs.tsx";
+import { TrashDialog } from "../features/base/TrashDialog.tsx";
+import { AccountMenu } from "../features/base/AccountMenu.tsx";
+import { useUndoRedo } from "../features/base/useUndoRedo.ts";
 import { NotificationsBell } from "../features/notifications/NotificationsBell.tsx";
 import { ImportWizard } from "../features/import/ImportWizard.tsx";
 import { ShareDialog } from "../features/share/ShareDialog.tsx";
 import { ViewsSidebar } from "../features/views/ViewsSidebar.tsx";
+import { FormsIndex } from "../features/views/FormsIndex.tsx";
+import { FieldManager } from "../features/schema/FieldManager.tsx";
 import type { ViewKind } from "../features/views/view-types.ts";
 import { AutomationsPanel } from "../features/automations/AutomationsPanel.tsx";
+import { ConfirmDialog, Dialog, DropdownMenu, PromptDialog, uiStyles } from "../app/ui.tsx";
+import { toast, errorMessage } from "../app/toast.tsx";
+import { baseColor } from "./home.tsx";
 import { TableGridPage } from "./table-grid.tsx";
 import styles from "./base.module.css";
 
 type BaseTab = "data" | "automations" | "interfaces" | "forms";
 
+// E's ExportMenu ({baseId, tableId, viewId}); falls back to a direct download.
+const exportModules = import.meta.glob("../features/import/ExportMenu.tsx");
+const exportLoader = Object.values(exportModules)[0];
+const LazyExportMenu = exportLoader
+  ? lazy(async () => {
+      const mod = (await exportLoader()) as {
+        ExportMenu: ComponentType<{ baseId: string; tableId: string; viewId?: string }>;
+      };
+      return { default: mod.ExportMenu };
+    })
+  : null;
+
+function readSearchFlag(name: string): boolean {
+  try {
+    return new URL(window.location.href).searchParams.get(name) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Publishes the active table/view to realtime presence. */
+function PresenceReporter({ tableId, viewId }: { tableId: string | null; viewId: string | null }) {
+  const session = useBaseSession();
+  useEffect(() => {
+    session.setPresence({ tableId, viewId });
+  }, [session, tableId, viewId]);
+  return null;
+}
+
+function UndoRedoButtons({ baseId }: { baseId: string }) {
+  const ur = useUndoRedo(baseId);
+  const mod = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl+";
+  return (
+    <div className={styles.undoGroup}>
+      <button
+        type="button"
+        className={styles.iconAction}
+        disabled={ur.busy || !ur.canUndo}
+        title={ur.undoLabel ? `Undo ${ur.undoLabel} (${mod}Z)` : `Undo (${mod}Z)`}
+        aria-label="Undo"
+        onClick={ur.undo}
+      >
+        ↶
+      </button>
+      <button
+        type="button"
+        className={styles.iconAction}
+        disabled={ur.busy || !ur.canRedo}
+        title={ur.redoLabel ? `Redo ${ur.redoLabel} (${mod}Shift+Z)` : `Redo (${mod}Shift+Z)`}
+        aria-label="Redo"
+        onClick={ur.redo}
+      >
+        ↷
+      </button>
+    </div>
+  );
+}
+
 export function BasePage({ baseId }: { baseId: string }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const baseQuery = useQuery({
     queryKey: ["bases", baseId],
     queryFn: () => api.getBase(baseId),
-  });
-
-  const undoMutation = useMutation({
-    mutationFn: () => api.undoBase(baseId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
-      void queryClient.invalidateQueries({ queryKey: ["records", baseId] });
-    },
-  });
-
-  const createTableMutation = useMutation({
-    mutationFn: (name: string) => api.createTable(baseId, name),
-    onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
-      setActiveTableId(res.table.id);
-      setBaseTab("data");
-    },
   });
 
   const tables = baseQuery.data?.tables ?? [];
@@ -45,11 +108,33 @@ export function BasePage({ baseId }: { baseId: string }) {
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
-  const [manageFieldsSignal, setManageFieldsSignal] = useState(0);
+  const [importTableId, setImportTableId] = useState<string | null>(null);
+  const [exportTableId, setExportTableId] = useState<string | null>(null);
+  const [fieldsOpen, setFieldsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [baseDialog, setBaseDialog] = useState<"rename" | "delete" | null>(null);
+  const [pendingImport, setPendingImport] = useState(() => readSearchFlag("import"));
 
-  const resolvedTableId = activeTableId ?? tables[0]?.id ?? null;
+  const resolvedTableId =
+    activeTableId && tables.some((t) => t.id === activeTableId)
+      ? activeTableId
+      : (tables[0]?.id ?? null);
   const activeTable = tables.find((t) => t.id === resolvedTableId) ?? null;
+
+  // "Create base → Import CSV" from the home page lands here with ?import=1.
+  useEffect(() => {
+    if (pendingImport && resolvedTableId) {
+      setImportTableId(resolvedTableId);
+      setPendingImport(false);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("import");
+      window.history.replaceState(window.history.state, "", url);
+    }
+  }, [pendingImport, resolvedTableId]);
+
+  useEffect(() => {
+    if (baseQuery.data?.name) document.title = `${baseQuery.data.name} · Tabula`;
+  }, [baseQuery.data?.name]);
 
   const viewsQuery = useQuery({
     queryKey: ["views", baseId, resolvedTableId],
@@ -115,31 +200,128 @@ export function BasePage({ baseId }: { baseId: string }) {
     },
   });
 
+  const renameBase = useMutation({
+    mutationFn: (name: string) => shellApi.renameBase(baseId, name),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
+      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      setBaseDialog(null);
+      toast.success("Base renamed");
+    },
+  });
+  const duplicateBase = useMutation({
+    mutationFn: () => shellApi.duplicateBase(baseId, { name: `${baseQuery.data?.name ?? "Base"} copy` }),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      toast.success(`Created “${res.name}”`, {
+        action: {
+          label: "Open",
+          onClick: () => void router.navigate({ to: "/bases/$baseId", params: { baseId: res.id } }),
+        },
+      });
+    },
+    onError: (err) => toast.error(err, "Could not duplicate base"),
+  });
+  const deleteBase = useMutation({
+    mutationFn: () => shellApi.deleteBase(baseId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      toast.success("Base deleted");
+      void router.navigate({ to: "/" });
+    },
+    onError: (err) => toast.error(err, "Could not delete base"),
+  });
+
+  // Stable: BaseSessionProvider keeps it in a ref anyway.
   const onResync = useCallback(() => {
-    void baseQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
     void queryClient.invalidateQueries({ queryKey: ["records", baseId] });
-  }, [baseId, baseQuery, queryClient]);
+  }, [baseId, queryClient]);
 
   if (baseQuery.isLoading) {
     return <p className={styles.empty}>Loading base…</p>;
   }
 
   if (baseQuery.isError || !baseQuery.data) {
-    return <p className={styles.empty}>Could not load this base.</p>;
+    const notFound =
+      baseQuery.error instanceof ApiProblemError &&
+      (baseQuery.error.problem.status === 404 || baseQuery.error.problem.status === 422);
+    return (
+      <div className={styles.errorState}>
+        <h1>{notFound ? "Base not found" : "Could not load this base"}</h1>
+        <p className={uiStyles.muted}>
+          {notFound
+            ? "It may have been deleted, or you don’t have access."
+            : errorMessage(baseQuery.error)}
+        </p>
+        <Link to="/" className={uiStyles.btnPrimary}>
+          Back to home
+        </Link>
+      </div>
+    );
   }
+
+  const base = baseQuery.data;
+  const tableNames = Object.fromEntries(tables.map((t) => [t.id, t.name]));
 
   return (
     <BaseSessionProvider baseId={baseId} onResync={onResync}>
+      <PresenceReporter
+        tableId={baseTab === "data" ? resolvedTableId : null}
+        viewId={baseTab === "data" ? (activeView?.id ?? null) : null}
+      />
       <div className={styles.shell}>
         <header className={styles.topBar}>
           <div className={styles.brand}>
-            <Link to="/" className={styles.homeLink} title="Home">
-              ←
+            <Link to="/" className={styles.homeLink} title="All bases" aria-label="Home">
+              <span className={styles.logo} aria-hidden>
+                T
+              </span>
             </Link>
-            <span className={styles.logo} aria-hidden>
-              T
-            </span>
-            <h1 className={styles.baseTitle}>{baseQuery.data.name}</h1>
+            <span
+              className={styles.baseIcon}
+              style={{ background: baseColor(baseId) }}
+              aria-hidden
+            />
+            <DropdownMenu
+              trigger={({ toggle, open }) => (
+                <button
+                  type="button"
+                  className={styles.baseTitleBtn}
+                  aria-expanded={open}
+                  onClick={toggle}
+                  title="Base options"
+                >
+                  <span className={styles.baseTitle}>{base.name}</span>
+                  <span aria-hidden className={styles.caret}>
+                    ▾
+                  </span>
+                </button>
+              )}
+              items={[
+                { key: "rename", icon: "✎", label: "Rename base", onSelect: () => setBaseDialog("rename") },
+                { key: "dup", icon: "⧉", label: "Duplicate base", onSelect: () => duplicateBase.mutate() },
+                {
+                  key: "copy",
+                  icon: "#",
+                  label: "Copy base ID",
+                  onSelect: () =>
+                    void navigator.clipboard
+                      ?.writeText(baseId)
+                      .then(() => toast.success("Base ID copied"))
+                      .catch(() => toast.info(baseId)),
+                },
+                { key: "trash", icon: "🗑", label: "Trash", onSelect: () => setTrashOpen(true) },
+                {
+                  key: "delete",
+                  icon: "⚠",
+                  label: "Delete base",
+                  danger: true,
+                  separatorBefore: true,
+                  onSelect: () => setBaseDialog("delete"),
+                },
+              ]}
+            />
           </div>
 
           <nav className={styles.navTabs} aria-label="Base sections">
@@ -154,11 +336,8 @@ export function BasePage({ baseId }: { baseId: string }) {
               <button
                 key={id}
                 type="button"
-                className={
-                  baseTab === id
-                    ? `${styles.navTab} ${styles.navTabActive}`
-                    : styles.navTab
-                }
+                className={styles.navTab}
+                data-active={baseTab === id}
                 onClick={() => setBaseTab(id)}
               >
                 {label}
@@ -167,70 +346,44 @@ export function BasePage({ baseId }: { baseId: string }) {
           </nav>
 
           <div className={styles.topActions}>
-            <PresenceAvatars />
+            <PresenceAvatars tableNames={tableNames} />
+            <UndoRedoButtons baseId={baseId} />
             <NotificationsBell />
-            <button
-              type="button"
-              className={styles.ghostBtn}
-              disabled={undoMutation.isPending}
-              onClick={() => undoMutation.mutate()}
-            >
-              Undo
-            </button>
             {activeTable ? (
               <button
                 type="button"
-                className={styles.shareBtn}
+                className={uiStyles.btnPrimary}
+                style={{ height: 32 }}
                 onClick={() => setShareOpen(true)}
               >
                 Share
               </button>
             ) : null}
+            <AccountMenu />
           </div>
         </header>
 
         {baseTab === "data" ? (
           <>
-            <div className={styles.tableBar} role="tablist" aria-label="Tables">
-              {tables.map((table) => (
-                <button
-                  key={table.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={table.id === resolvedTableId}
-                  className={
-                    table.id === resolvedTableId
-                      ? `${styles.tableTab} ${styles.tableTabActive}`
-                      : styles.tableTab
-                  }
-                  onClick={() => {
-                    setActiveTableId(table.id);
-                    setActiveViewId(null);
-                  }}
-                >
-                  {table.name}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={styles.addTableBtn}
-                title="Add table"
-                disabled={createTableMutation.isPending}
-                onClick={() => {
-                  const name = window.prompt(
-                    "New table name",
-                    `Table ${tables.length + 1}`,
-                  );
-                  if (name?.trim()) {
-                    createTableMutation.mutate(name.trim());
-                  }
+            <div className={styles.tableBar}>
+              <TableTabs
+                baseId={baseId}
+                tables={tables}
+                activeTableId={resolvedTableId}
+                onSelect={(id) => {
+                  setActiveTableId(id);
+                  setActiveViewId(null);
                 }}
-              >
-                +
-              </button>
+                onImport={(id) => setImportTableId(id)}
+                onExport={(id) => setExportTableId(id)}
+              />
               <div className={styles.tableBarSpacer} />
               <ToolsMenu
-                onManageFields={() => setManageFieldsSignal((n) => n + 1)}
+                disabled={!activeTable}
+                onManageFields={() => setFieldsOpen(true)}
+                onImport={() => resolvedTableId && setImportTableId(resolvedTableId)}
+                onExport={() => resolvedTableId && setExportTableId(resolvedTableId)}
+                onTrash={() => setTrashOpen(true)}
               />
             </div>
 
@@ -252,9 +405,8 @@ export function BasePage({ baseId }: { baseId: string }) {
                       baseId={baseId}
                       table={activeTable}
                       {...(activeView ? { activeView } : {})}
-                      manageFieldsSignal={manageFieldsSignal}
                       onOpenShare={() => setShareOpen(true)}
-                      onOpenImport={() => setImportOpen(true)}
+                      onOpenImport={() => setImportTableId(activeTable.id)}
                       onSchemaChange={() => {
                         void baseQuery.refetch();
                       }}
@@ -262,28 +414,49 @@ export function BasePage({ baseId }: { baseId: string }) {
                   </div>
                 </>
               ) : (
-                <p className={styles.empty}>
-                  This base has no tables yet. Click + to add one.
-                </p>
+                <div className={styles.errorState}>
+                  <h1>This base has no tables</h1>
+                  <p className={uiStyles.muted}>Use “+ Add or import” to create one.</p>
+                </div>
               )}
             </div>
           </>
         ) : null}
 
-        {baseTab === "automations" ? (
-          <AutomationsPanel baseId={baseId} />
-        ) : null}
+        {baseTab === "automations" ? <AutomationsPanel baseId={baseId} /> : null}
 
         {baseTab === "interfaces" ? (
-          <p className={styles.empty}>
-            Interfaces builder ships in a later phase. Use Data views for now.
-          </p>
+          <div className={styles.comingSoon}>
+            <div className={styles.comingSoonCard}>
+              <span className={styles.comingSoonBadge}>Coming soon</span>
+              <h1>Interfaces</h1>
+              <p>
+                Build custom dashboards and apps on top of this base’s data. The interface designer
+                isn’t available yet — use views in the Data tab, or share a form, in the meantime.
+              </p>
+              <div className={styles.comingSoonActions}>
+                <button type="button" className={uiStyles.btnPrimary} onClick={() => setBaseTab("data")}>
+                  Go to data
+                </button>
+                <button type="button" className={uiStyles.btn} onClick={() => setBaseTab("forms")}>
+                  View forms
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {baseTab === "forms" ? (
-          <p className={styles.empty}>
-            Create a Form view from the views sidebar to collect submissions.
-          </p>
+          <div className={styles.formsTab}>
+            <FormsIndex
+              baseId={baseId}
+              onOpenForm={(tableId, viewId) => {
+                setActiveTableId(tableId);
+                setActiveViewId(viewId);
+                setBaseTab("data");
+              }}
+            />
+          </div>
         ) : null}
       </div>
 
@@ -296,16 +469,78 @@ export function BasePage({ baseId }: { baseId: string }) {
           onClose={() => setShareOpen(false)}
         />
       ) : null}
-      {importOpen && activeTable ? (
+      {importTableId ? (
         <ImportWizard
           baseId={baseId}
-          tableId={activeTable.id}
-          onClose={() => setImportOpen(false)}
+          tableId={importTableId}
+          onClose={() => setImportTableId(null)}
           onDone={() => {
-            void queryClient.invalidateQueries({
-              queryKey: ["records", baseId],
-            });
+            void queryClient.invalidateQueries({ queryKey: ["records", baseId] });
+            void queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
           }}
+        />
+      ) : null}
+      {exportTableId ? (
+        <Dialog title="Export CSV" onClose={() => setExportTableId(null)}>
+          {LazyExportMenu ? (
+            <Suspense fallback={<p className={uiStyles.muted}>Loading…</p>}>
+              <LazyExportMenu
+                baseId={baseId}
+                tableId={exportTableId}
+                {...(exportTableId === resolvedTableId && activeView?.id
+                  ? { viewId: activeView.id }
+                  : {})}
+              />
+            </Suspense>
+          ) : (
+            <>
+              <p>
+                Download <strong>{tableNames[exportTableId] ?? "this table"}</strong>
+                {exportTableId === resolvedTableId && activeView ? ` (view “${activeView.name}”)` : ""}{" "}
+                as a CSV file.
+              </p>
+              <a
+                className={uiStyles.btnPrimary}
+                href={`/v1/bases/${baseId}/tables/${exportTableId}/export?format=csv${
+                  exportTableId === resolvedTableId && activeView?.id ? `&viewId=${activeView.id}` : ""
+                }`}
+                download
+                onClick={() => setTimeout(() => setExportTableId(null), 300)}
+              >
+                Download CSV
+              </a>
+            </>
+          )}
+        </Dialog>
+      ) : null}
+      {fieldsOpen && activeTable ? (
+        <FieldManager baseId={baseId} table={activeTable} onClose={() => setFieldsOpen(false)} />
+      ) : null}
+      {trashOpen ? <TrashDialog baseId={baseId} onClose={() => setTrashOpen(false)} /> : null}
+      {baseDialog === "rename" ? (
+        <PromptDialog
+          title="Rename base"
+          label="Base name"
+          initialValue={base.name}
+          busy={renameBase.isPending}
+          error={renameBase.isError ? errorMessage(renameBase.error) : null}
+          onSubmit={(name) => renameBase.mutate(name)}
+          onClose={() => setBaseDialog(null)}
+        />
+      ) : null}
+      {baseDialog === "delete" ? (
+        <ConfirmDialog
+          title="Delete base?"
+          message={
+            <>
+              <strong>{base.name}</strong> and all of its tables, records and automations will be
+              deleted for everyone.
+            </>
+          }
+          confirmLabel="Delete base"
+          busy={deleteBase.isPending}
+          onConfirm={() => deleteBase.mutate()}
+          onClose={() => setBaseDialog(null)}
         />
       ) : null}
     </BaseSessionProvider>

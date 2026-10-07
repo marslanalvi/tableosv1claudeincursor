@@ -6,6 +6,7 @@ import { Popover } from "./Popover.tsx";
 import { VIEW_CREATE_OPTIONS, type ViewKind } from "./view-types.ts";
 import {
   COLOR_NAMES,
+  cleanFilter,
   colorOf,
   countConditions,
   orderedFields,
@@ -606,7 +607,7 @@ export function ViewToolbar({
   const [open, setOpen] = useState<PanelId>(null);
   const fields = useMemo(() => orderedFields(table, config), [table, config]);
   const disabled = !canEdit;
-  const filterCount = countConditions(config.filter);
+  const filterCount = countConditions(cleanFilter(config.filter));
   const hiddenCount = config.hiddenFieldIds.filter((id) => table.fields.some((f) => f.id === id)).length;
   const meta = VIEW_CREATE_OPTIONS.find((o) => o.id === kind);
   const searchRef = useRef<HTMLInputElement | null>(null);

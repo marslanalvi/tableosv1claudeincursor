@@ -22,6 +22,11 @@ export async function loadTableFields(
   return result.rows;
 }
 
+/**
+ * Legacy mapping of `{fld_…|name: value}` → `{slot: value}` WITHOUT validation.
+ * New code should use `TableWriter.prepare` from `records/write.ts`, which
+ * validates/normalizes values and rejects unknown or read-only fields.
+ */
 export function mapInputFieldsToCells(
   fields: FieldRow[],
   input: Record<string, unknown>,
@@ -32,7 +37,7 @@ export function mapInputFieldsToCells(
 
   for (const [key, value] of Object.entries(input)) {
     let field: FieldRow | undefined;
-    if (key.includes("_")) {
+    if (key.startsWith("fld_")) {
       try {
         const decoded = decodePublicId(key);
         if (decoded.prefix === "fld") {
@@ -42,7 +47,7 @@ export function mapInputFieldsToCells(
         field = byName.get(key.toLowerCase());
       }
     } else {
-      field = byName.get(key.toLowerCase());
+      field = byId.get(key) ?? byName.get(key.toLowerCase());
     }
     if (field) {
       cells[String(field.slot)] = value;

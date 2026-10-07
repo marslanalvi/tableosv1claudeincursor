@@ -108,6 +108,7 @@ export function useFieldServices(baseId: string): FieldUiServices {
         const pf = t ? primaryFieldOf(t) : undefined;
         const rec = await recordsApi.create(baseId, tableId, pf && name ? { [pf.id]: name } : {}, true);
         void qc.invalidateQueries({ queryKey: ["records", baseId, tableId] });
+        if (!rec) throw new Error("The new record could not be read back; try again.");
         return { id: rec.id, name };
       },
       async listCollaborators() {

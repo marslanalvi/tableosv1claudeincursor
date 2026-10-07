@@ -15,6 +15,7 @@ import { runTransactionWithAfterCommit, withBaseTx } from "../../kernel/mutation
 import { bootstrapDefaultTable } from "./bootstrap-default-table.js";
 import { loadTableConfigInfo, serializeView } from "../views/serialize.js";
 import { compileForUser } from "../access/compile.js";
+import { fieldRowToDto } from "../schema/field-dto.js";
 
 const nameBody = z.object({
   name: z.string().min(1).max(200),
@@ -173,8 +174,10 @@ export async function registerBaseRoutes(
           slot: number;
           config: unknown;
           order_key: string;
+          description: string;
+          is_computed: boolean;
         }>`
-          SELECT id, table_id, name, type, slot, config, order_key
+          SELECT id, table_id, name, type, slot, config, order_key, description, is_computed
           FROM data.fields
           WHERE base_id = ${baseId} AND deleted_at IS NULL
           ORDER BY order_key ASC, slot ASC
@@ -209,6 +212,7 @@ export async function registerBaseRoutes(
           ORDER BY v.order_key ASC
         `.execute(ctx.db);
 
+        const fieldNameById = new Map(fields.rows.map((f) => [f.id, f.name]));
         const fieldsByTable = new Map<string, typeof fields.rows>();
         for (const field of fields.rows) {
           const list = fieldsByTable.get(field.table_id) ?? [];
@@ -241,13 +245,21 @@ export async function registerBaseRoutes(
             primaryFieldId: table.primary_field_id
               ? pid("fld", table.primary_field_id)
               : "",
-            fields: (fieldsByTable.get(table.id) ?? []).map((f) => ({
-              id: pid("fld", f.id),
-              name: f.name,
-              type: f.type,
-              slot: f.slot,
-              config: (f.config ?? {}) as Record<string, unknown>,
-            })),
+            // FieldDto (CONTRACTS §4) via workstream B's serializer.
+            fields: (fieldsByTable.get(table.id) ?? []).map((f) =>
+              fieldRowToDto(
+                {
+                  id: f.id,
+                  name: f.name,
+                  type: f.type,
+                  slot: Number(f.slot),
+                  config: (f.config ?? {}) as Record<string, unknown>,
+                  description: f.description ?? "",
+                  isComputed: f.is_computed,
+                },
+                { primaryFieldId: table.primary_field_id, nameById: fieldNameById },
+              ),
+            ),
             views: (viewsByTable.get(table.id) ?? []).map((v) =>
               serializeView(v, user.id, viewConfigInfo.get(table.id), viewIsBaseCreator),
             ),

@@ -1,85 +1,58 @@
-import { request, type FilterAst, type RecordDto, type ViewDto } from "../api.ts";
+import {
+  ApiProblemError,
+  newClientOpId,
+  rememberClientOp,
+  request,
+  type FilterAst,
+  type RecordDto,
+  type ViewDto,
+} from "../api.ts";
 
-/** CONTRACTS §5 */
-export type RowHeight = "short" | "medium" | "tall" | "extra";
-export type SortSpec = { fieldId: string; direction: "asc" | "desc" };
-export type SummaryKind =
-  | "none"
-  | "count"
-  | "empty"
-  | "filled"
-  | "unique"
-  | "sum"
-  | "avg"
-  | "min"
-  | "max";
-export type ColorConfig =
-  | { mode: "none" }
-  | { mode: "select"; fieldId: string }
-  | { mode: "conditions"; rules: { filter: FilterAst; color: string }[] };
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-export interface FormFieldConfig {
-  fieldId: string;
-  required: boolean;
-  label?: string;
-  help?: string;
+/**
+ * POST for read-only endpoints (records/query). Deliberately bypasses
+ * `request()` so no Idempotency-Key / client-op id is attached: reads must not
+ * be deduplicated or replayed by the idempotency layer.
+ */
+async function sendJson<T>(method: string, path: string, json: unknown, opId?: string): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (opId) {
+    headers["X-Tabula-Client-Op-Id"] = opId;
+    rememberClientOp(opId);
+  }
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    credentials: "include",
+    headers,
+    body: JSON.stringify(json),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let problem;
+    try {
+      problem = JSON.parse(text);
+    } catch {
+      problem = { code: "VALIDATION_FAILED", title: res.statusText || "Request failed", status: res.status, detail: text };
+    }
+    throw new ApiProblemError(problem);
+  }
+  if (!text) throw new Error("Empty response from server");
+  return JSON.parse(text) as T;
 }
 
-export interface ViewConfig {
-  filter: FilterAst | null;
-  sorts: SortSpec[];
-  groups: SortSpec[];
-  hiddenFieldIds: string[];
-  fieldOrder: string[];
-  fieldWidths: Record<string, number>;
-  frozenFieldCount: number;
-  rowHeight: RowHeight;
-  color: ColorConfig;
-  summary: Record<string, SummaryKind>;
-  kanban?: {
-    stackFieldId: string | null;
-    coverFieldId?: string | null;
-    hideEmptyStacks?: boolean;
-    collapsedStacks?: string[];
-    cardFieldIds?: string[];
-  };
-  calendar?: { dateFieldId: string | null; endDateFieldId?: string | null; mode?: "month" | "week" };
-  gallery?: { coverFieldId?: string | null; coverFit?: "cover" | "contain"; cardFieldIds?: string[] };
-  timeline?: { startFieldId: string | null; endFieldId?: string | null; scale?: "day" | "week" | "month" };
-  form?: {
-    title: string;
-    description: string;
-    fields: FormFieldConfig[];
-    submitLabel: string;
-    successMessage: string;
-    allowResubmit: boolean;
-  };
+/** POST for read-only endpoints (records/query): no op id / Idempotency-Key. */
+function postRead<T>(path: string, json: unknown): Promise<T> {
+  return sendJson<T>("POST", path, json);
 }
 
-export interface ViewWire extends ViewDto {
-  tableId?: string;
-  isDefault?: boolean;
-  canEdit?: boolean;
-  config?: ViewConfig & Record<string, unknown>;
-}
-
-export const DEFAULT_VIEW_CONFIG: ViewConfig = {
-  filter: null,
-  sorts: [],
-  groups: [],
-  hiddenFieldIds: [],
-  fieldOrder: [],
-  fieldWidths: {},
-  frozenFieldCount: 1,
-  rowHeight: "short",
-  color: { mode: "none" },
-  summary: {},
-};
-
-/** Fill defaults client-side (server already does; this guards old payloads). */
-export function viewConfigOf(view: ViewDto | undefined | null): ViewConfig {
-  const raw = (view?.config ?? {}) as Partial<ViewConfig>;
-  return { ...DEFAULT_VIEW_CONFIG, ...raw };
+/**
+ * Record writes from views. Sends the client op id (so realtime echoes are
+ * skipped) but no Idempotency-Key: the idempotency layer currently returns an
+ * empty body when that header is present (see CONTRACTS "Contract changes").
+ */
+function write<T>(method: string, path: string, json: unknown): Promise<T> {
+  return sendJson<T>(method, path, json, newClientOpId());
 }
 
 const tablePath = (baseId: string, tableId: string) =>
@@ -167,9 +140,9 @@ export const viewRecordsApi = {
     if (!body.search) delete clean.search;
     if (!body.sort || body.sort.length === 0) delete clean.sort;
     do {
-      const page: { records: ViewRecord[]; nextCursor: string | null } = await request(
+      const page: { records: ViewRecord[]; nextCursor: string | null } = await postRead(
         `${tablePath(baseId, tableId)}/records/query`,
-        { method: "POST", json: cursor ? { ...clean, cursor } : clean },
+        cursor ? { ...clean, cursor } : clean,
       );
       out.push(...page.records);
       cursor = page.nextCursor;
@@ -177,9 +150,9 @@ export const viewRecordsApi = {
     return out;
   },
   async create(baseId: string, tableId: string, fields: Record<string, unknown>, typecast = true) {
-    const res = await request<{ record: ViewRecord }>(`${tablePath(baseId, tableId)}/records`, {
-      method: "POST",
-      json: { fields, typecast },
+    const res = await write<{ record: ViewRecord }>("POST", `${tablePath(baseId, tableId)}/records`, {
+      fields,
+      typecast,
     });
     return res.record;
   },
@@ -190,9 +163,10 @@ export const viewRecordsApi = {
     fields: Record<string, unknown>,
     typecast = true,
   ) {
-    const res = await request<{ record: ViewRecord }>(
+    const res = await write<{ record: ViewRecord }>(
+      "PATCH",
       `${tablePath(baseId, tableId)}/records/${recordId}`,
-      { method: "PATCH", json: { fields, typecast } },
+      { fields, typecast },
     );
     return res.record;
   },
@@ -202,10 +176,7 @@ export const viewRecordsApi = {
     recordId: string,
     pos: { before?: string | null; after?: string | null },
   ) {
-    return request<{ record: ViewRecord }>(
-      `${tablePath(baseId, tableId)}/records/${recordId}/move`,
-      { method: "POST", json: pos },
-    );
+    return write<{ record: ViewRecord }>("POST", `${tablePath(baseId, tableId)}/records/${recordId}/move`, pos);
   },
 };
 

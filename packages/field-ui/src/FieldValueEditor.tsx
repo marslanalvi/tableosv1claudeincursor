@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactElement,
@@ -195,7 +196,7 @@ function TextEditor(props: FieldValueEditorProps): ReactElement {
   const ref = useRef<HTMLInputElement>(null);
   const isNumeric = ["number", "currency", "percent"].includes(field.type);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !(autoFocus ?? mode === "cell")) return;
     el.focus();
@@ -246,7 +247,7 @@ function LongTextEditor(props: FieldValueEditorProps): ReactElement {
   const { field, value, onChange, mode = "form", autoFocus, initialText, onDone, placeholder } = props;
   const d = useDraft(field, value, initialText, onChange);
   const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !(autoFocus ?? mode === "cell")) return;
     el.focus();
@@ -313,7 +314,7 @@ function DateEditor(props: FieldValueEditorProps): ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (autoFocus ?? mode === "cell") ref.current?.focus();
   }, [autoFocus, mode]);
 
@@ -808,7 +809,7 @@ function RatingEditor(props: FieldValueEditorProps): ReactElement {
   const current = toNumber(value) ?? 0;
   const [hover, setHover] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (mode === "cell") ref.current?.focus();
   }, [mode]);
   const set = (n: number) => {

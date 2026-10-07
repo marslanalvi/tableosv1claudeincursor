@@ -1,35 +1,30 @@
-import { useMemo } from "react";
-import { usePresenceStore } from "../../stores/presence.ts";
+import { useOtherUsers } from "../../stores/presence.ts";
+import { Avatar } from "../../app/ui.tsx";
 import styles from "./presence.module.css";
 
-export function PresenceAvatars() {
-  const byConnId = usePresenceStore((s) => s.byConnId);
-  const entries = useMemo(() => [...byConnId.values()], [byConnId]);
-  if (entries.length === 0) return null;
-
+/** Avatars of other users currently in this base (live via realtime presence). */
+export function PresenceAvatars({
+  tableNames,
+}: {
+  /** tbl_ id → name, to say where each collaborator is. */
+  tableNames?: Record<string, string>;
+}) {
+  const others = useOtherUsers();
+  if (others.length === 0) return null;
+  const shown = others.slice(0, 5);
+  const extra = others.length - shown.length;
   return (
-    <div className={styles.row} aria-label="Collaborators in this base">
-      {entries.map((entry) => {
-        const initials =
-          entry.user.name
-            .split(/\s+/)
-            .map((p) => p[0])
-            .join("")
-            .slice(0, 2)
-            .toUpperCase() || "?";
+    <div className={styles.row} aria-label="Collaborators viewing this base">
+      {shown.map((entry) => {
+        const where = entry.state.tableId ? tableNames?.[entry.state.tableId] : undefined;
+        const title = where ? `${entry.user.name} — viewing ${where}` : entry.user.name;
         return (
-          <span
-            key={entry.connId}
-            className={styles.avatar}
-            title={entry.user.name}
-            style={
-              entry.color ? { backgroundColor: entry.color } : undefined
-            }
-          >
-            {initials}
+          <span key={entry.user.id} className={styles.ring} style={{ borderColor: entry.color }}>
+            <Avatar name={entry.user.name} color={entry.color} size={26} title={title} />
           </span>
         );
       })}
+      {extra > 0 ? <span className={styles.more}>+{extra}</span> : null}
     </div>
   );
 }

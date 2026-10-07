@@ -206,13 +206,14 @@ export function GridView(props: GridViewProps) {
         { filter: filter ?? null, sort: effSort, search: term, pageSize: PAGE_SIZE, cursor: pageParam },
         signal,
       ),
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    getNextPageParam: (last) => last?.nextCursor ?? undefined,
     placeholderData: (prev) => prev,
   });
   const pages = query.data?.pages;
+  (window as unknown as Record<string, unknown>)["__gridDebug"] = { data: query.data, status: query.status, fetch: query.fetchStatus, key: queryKey };
   const lookupMap = useMemo(() => {
     const m = new Map<string, RecordWire>();
-    for (const p of pages ?? []) for (const r of p.records) m.set(r.id, r);
+    for (const p of pages ?? []) for (const r of p?.records ?? []) m.set(r.id, r);
     return m;
   }, [pages]);
   const lookupRef = useRef(lookupMap);
@@ -223,7 +224,7 @@ export function GridView(props: GridViewProps) {
   }, [lookupMap]);
 
   const records = useMemo(() => {
-    let rows = (pages ?? []).flatMap((p) => p.records).map(writes.withOverrides);
+    let rows = (pages ?? []).flatMap((p) => p?.records ?? []).map(writes.withOverrides);
     if (term) {
       // Guard in case the server ignores `search`.
       const q = term.toLowerCase();
@@ -352,6 +353,8 @@ export function GridView(props: GridViewProps) {
   const [active, setActive] = useState<Cell | null>(null);
   const [anchor, setAnchor] = useState<Cell | null>(null);
   const [editing, setEditing] = useState<(Cell & { initialText?: string | undefined }) | null>(null);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
   const [selectedRows, setSelectedRows] = useState<Set<string>>(() => new Set());
   const [fillTo, setFillTo] = useState<number | null>(null);
   const dragRef = useRef<null | { kind: "select" } | { kind: "fill" }>(null);
@@ -448,6 +451,7 @@ export function GridView(props: GridViewProps) {
       if (f.type === "checkbox") return false;
       setActive(cell);
       setAnchor(cell);
+      editingRef.current = { ...cell, initialText };
       setEditing({ ...cell, initialText });
       return true;
     },
@@ -466,10 +470,8 @@ export function GridView(props: GridViewProps) {
 
   const onEditDone = useCallback(
     (reason: EditDoneReason) => {
-      setEditing((cur) => {
-        if (!cur) return cur;
-        return null;
-      });
+      editingRef.current = null;
+      setEditing(null);
       focusGrid();
       if (reason === "enter") moveBy(1, 0, false);
       else if (reason === "tab") moveBy(0, 1, false);
@@ -615,6 +617,7 @@ export function GridView(props: GridViewProps) {
           try {
             const created = await recordsApi.createMany(baseId, table.id, newRows, true);
             appendToCache(created);
+            if (created.length < newRows.length) void qc.invalidateQueries({ queryKey: ["records", baseId, table.id] });
           } catch (e) {
             toastError(`Couldn't create rows: ${errorMessage(e)}`);
           }
@@ -632,7 +635,7 @@ export function GridView(props: GridViewProps) {
       const n = updates.length + newRows.length;
       if (n > 1) toastInfo(`Pasted into ${n} records`);
     },
-    [canEdit, active, range, navIndexById, colIndexById, navRows, columns, fieldById, writes, hasMore, baseId, table.id, appendToCache],
+    [canEdit, active, range, navIndexById, colIndexById, navRows, columns, fieldById, writes, hasMore, baseId, table.id, appendToCache, qc],
   );
 
   // Clipboard events go to <body> when a non-editable element is focused.
@@ -640,8 +643,6 @@ export function GridView(props: GridViewProps) {
   copyRef.current = copyRange;
   const pasteRef = useRef(pasteText);
   pasteRef.current = pasteText;
-  const editingRef = useRef(editing);
-  editingRef.current = editing;
   useEffect(() => {
     const isOurs = () => document.activeElement === scrollerRef.current && !editingRef.current;
     const onCopy = (e: ClipboardEvent) => {
@@ -675,8 +676,12 @@ export function GridView(props: GridViewProps) {
       if (!canEdit) return;
       try {
         const rec = await recordsApi.create(baseId, table.id, {});
+        if (!rec) {
+          void qc.invalidateQueries({ queryKey: ["records", baseId, table.id] });
+          return;
+        }
         noteRecordVersion(rec.id, rec.version);
-        const flat = (pages ?? []).flatMap((p) => p.records);
+        const flat = (pages ?? []).flatMap((p) => p?.records ?? []);
         if (pos?.before || pos?.after) {
           const refIdx = flat.findIndex((r) => r.id === (pos.before ?? pos.after));
           appendToCache([rec], { index: Math.max(0, refIdx + (pos.after ? 1 : 0)) });
@@ -698,7 +703,7 @@ export function GridView(props: GridViewProps) {
         toastError(`Couldn't add record: ${errorMessage(e)}`);
       }
     },
-    [canEdit, baseId, table.id, pages, appendToCache, columns],
+    [canEdit, baseId, table.id, pages, appendToCache, columns, qc],
   );
 
   // Scroll to newly-selected rows once they exist.
@@ -742,7 +747,8 @@ export function GridView(props: GridViewProps) {
             }
           }
           const rec = await recordsApi.duplicate(baseId, table.id, id, input);
-          const flat = (pages ?? []).flatMap((p) => p.records);
+          if (!rec) continue;
+          const flat = (pages ?? []).flatMap((p) => p?.records ?? []);
           appendToCache([rec], { index: flat.findIndex((r) => r.id === id) + 1 });
         }
         if (ids.length > 1) toastInfo(`Duplicated ${ids.length} records`);
@@ -976,7 +982,7 @@ export function GridView(props: GridViewProps) {
       if (target < 0 || from === undefined || target === from || target === from + 1) return;
       const before = navRows[target];
       const after = navRows[target - 1];
-      const flat = (pages ?? []).flatMap((p) => p.records);
+      const flat = (pages ?? []).flatMap((p) => p?.records ?? []);
       const moved = flat.find((r) => r.id === rec.id);
       if (!moved) return;
       // Optimistic reorder in this view's cache.
@@ -1019,6 +1025,7 @@ export function GridView(props: GridViewProps) {
       focusGrid();
       return;
     }
+    editingRef.current = null;
     setEditing(null);
     setActive(cell);
     setAnchor(cell);
@@ -1031,8 +1038,8 @@ export function GridView(props: GridViewProps) {
       void writes.writeRecord(cell.r, { [field.id]: cur === n ? null : n });
     }
     dragRef.current = { kind: "select" };
-    // Focus the grid after the editor (if any) has blurred & committed.
-    requestAnimationFrame(focusGrid);
+    // Focusing the grid blurs (and thereby commits) any open editor.
+    focusGrid();
   };
 
   const onBodyMouseOver = (e: React.MouseEvent) => {
@@ -1083,6 +1090,15 @@ export function GridView(props: GridViewProps) {
 
   // ------------------------------------------------------------------ keyboard
   const onKeyDown = (e: React.KeyboardEvent) => {
+    const pendingEdit = editingRef.current;
+    if (pendingEdit && e.target === scrollerRef.current && e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+      // Keystrokes that raced ahead of the editor mounting: append them.
+      e.preventDefault();
+      const next = { ...pendingEdit, initialText: (pendingEdit.initialText ?? "") + e.key };
+      editingRef.current = next;
+      setEditing(next);
+      return;
+    }
     if (editing || menu || confirm || fieldDialog) return;
     if (e.target !== scrollerRef.current) return;
     const mod = e.metaKey || e.ctrlKey;

@@ -8,6 +8,7 @@ import { resolveBaseContext } from "../access/helpers.js";
 import { compileForUser } from "../access/compile.js";
 import { assertCan } from "../access/assert.js";
 import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
+import { registerTableFallbackRoutes } from "../base/table-fallback-routes.js";
 import {
   applyHistoryOpsInTx,
   isSupportedOpList,
@@ -168,6 +169,10 @@ export async function registerHistoryRoutes(
   app: FastifyInstance,
   ctx: AppContext,
 ): Promise<void> {
+  // Registered here (after schema/records routes) so B's own implementations
+  // of these contract routes win when they exist.
+  registerTableFallbackRoutes(app, ctx);
+
   app.get<{ Params: { baseId: string } }>(
     "/v1/bases/:baseId/undo-state",
     async (request, reply) => {

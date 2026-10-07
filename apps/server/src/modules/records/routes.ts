@@ -1,48 +1,81 @@
-import type { Database } from "@tabula/db";
-import { generateUuidV7 } from "@tabula/types";
-import { sql, type Transaction } from "kysely";
-
-type DbTrx = Transaction<Database>;
-import type { FastifyInstance } from "fastify";
+/**
+ * Record write endpoints (CONTRACTS §3, workstream B). Reads live in the
+ * query module (A). Every response returns full records in the wire format.
+ */
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { sql } from "kysely";
 import { z } from "zod";
 import type { AppContext } from "../../lib/app-context.js";
-import { nextOrderKey } from "../../lib/order-key.js";
 import { parsePid, pid } from "../../lib/public-ids.js";
-import {
-  conflict,
-  handleRouteError,
-  notFound,
-} from "../../http/errors.js";
+import { ApiError, handleRouteError, notFound } from "../../http/errors.js";
 import { resolveTableContext } from "../access/helpers.js";
 import { assertCan } from "../access/assert.js";
 import { compileForUser } from "../access/compile.js";
-import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
-import { loadTableFields, mapInputFieldsToCells } from "../schema/field-map.js";
-import { afterRecordCellWrite } from "./post-write.js";
-import { createDeletionBatchInTx } from "../history/apply-inverse.js";
-import {
-  loadSidecarFields,
-  loadSidecarTableMeta,
-} from "../recordstore/load-meta.js";
-import { deleteSidecars, upsertSidecars } from "../recordstore/sidecars.js";
+import { withBaseTx, type MutationActor, type BaseMutationContext } from "../../kernel/mutation.js";
 import { LimitsService } from "../billing/limits-service.js";
+import { serializeRecordsByIds } from "./serialize.js";
+import {
+  MAX_BATCH,
+  TableWriter,
+  computeOps,
+  createRecordsInTx,
+  deleteRecordsInTx,
+  duplicateRecordInTx,
+  moveRecordInTx,
+  touchedTableIds,
+  updateRecordsInTx,
+  type WriteContext,
+} from "./write.js";
 
-const recordBody = z.object({
-  fields: z.record(z.unknown()),
-  version: z.number().int().positive().optional(),
+const fieldsSchema = z.record(z.unknown());
+
+const createBody = z.object({
+  fields: fieldsSchema.default({}),
+  typecast: z.boolean().optional(),
 });
 
-const batchBody = z.object({
-  records: z.array(
-    z.object({
-      id: z.string().optional(),
-      fields: z.record(z.unknown()),
-    }),
-  ),
+const batchCreateBody = z.object({
+  records: z
+    .array(z.object({ id: z.string().optional(), fields: fieldsSchema.default({}) }))
+    .min(1, "At least one record is required")
+    .max(MAX_BATCH, `At most ${MAX_BATCH} records per request`),
+  typecast: z.boolean().optional(),
   atomic: z.boolean().optional(),
 });
 
-function actor(user: NonNullable<import("fastify").FastifyRequest["user"]>): MutationActor {
+const patchBody = z.object({
+  fields: fieldsSchema,
+  typecast: z.boolean().optional(),
+  version: z.number().int().positive().optional(),
+});
+
+const batchPatchBody = z.object({
+  records: z
+    .array(
+      z.object({
+        id: z.string(),
+        fields: fieldsSchema,
+        version: z.number().int().positive().optional(),
+      }),
+    )
+    .min(1, "At least one record is required")
+    .max(MAX_BATCH, `At most ${MAX_BATCH} records per request`),
+  typecast: z.boolean().optional(),
+});
+
+const batchDeleteBody = z.object({
+  ids: z
+    .array(z.string())
+    .min(1, "At least one record id is required")
+    .max(MAX_BATCH, `At most ${MAX_BATCH} records per request`),
+});
+
+const moveBody = z.object({
+  before: z.string().nullish(),
+  after: z.string().nullish(),
+});
+
+function actor(user: NonNullable<FastifyRequest["user"]>): MutationActor {
   return {
     actorType: "user",
     actorId: user.id,
@@ -51,61 +84,53 @@ function actor(user: NonNullable<import("fastify").FastifyRequest["user"]>): Mut
   };
 }
 
-async function insertOneRecord(
-  trx: DbTrx,
-  params: {
-    tableId: string;
-    baseId: string;
-    workspaceId: string;
-    userId: string;
-    recordId?: string;
-    cells: Record<string, unknown>;
-    changeSeq: number;
-    sidecarFields: Awaited<ReturnType<typeof loadSidecarFields>>;
-    sidecarTable: Awaited<ReturnType<typeof loadSidecarTableMeta>>;
-  },
-): Promise<string> {
-  const recordId = params.recordId ?? generateUuidV7();
+type TableCtx = { orgId: string; workspaceId: string; tableName: string };
 
-  const rowNum = await sql<{ row_number: string }>`
-    UPDATE data.tables
-    SET next_row_number = next_row_number + 1,
-        record_count = record_count + 1,
-        updated_at = now()
-    WHERE id = ${params.tableId}
-    RETURNING (next_row_number - 1) AS row_number
-  `.execute(trx);
+async function resolve(
+  ctx: AppContext,
+  request: FastifyRequest<{ Params: { baseId: string; tableId: string } }>,
+  reply: FastifyReply,
+  action: "record.create" | "record.update" | "record.delete",
+): Promise<{ baseId: string; tableId: string; userId: string; table: TableCtx; user: NonNullable<FastifyRequest["user"]> } | null> {
+  const user = request.user;
+  if (!user) {
+    notFound(request, reply);
+    return null;
+  }
+  const baseId = parsePid(request.params.baseId, "bas");
+  const tableId = parsePid(request.params.tableId, "tbl");
+  const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
+  if (!table.ok) {
+    notFound(request, reply, "Table not found");
+    return null;
+  }
+  const snapshot = await compileForUser(ctx.db, user.id, baseId);
+  assertCan(snapshot, action);
+  return { baseId, tableId, userId: user.id, table, user };
+}
 
-  const rowNumber = rowNum.rows[0]?.row_number ?? "1";
-  const manualOrder = nextOrderKey();
-
-  await sql`
-    INSERT INTO data.records (
-      table_id, id, workspace_id, base_id, row_number, manual_order, cells,
-      created_by, created_via, last_change_seq
-    ) VALUES (
-      ${params.tableId}, ${recordId}, ${params.workspaceId}, ${params.baseId},
-      ${rowNumber}, ${manualOrder}, ${JSON.stringify(params.cells)}::jsonb,
-      ${params.userId}, 'api', ${params.changeSeq}
-    )
-  `.execute(trx);
-
-  await upsertSidecars(
+function writeCtx(
+  ctx: AppContext,
+  mctx: BaseMutationContext,
+  trx: WriteContext["trx"],
+  baseId: string,
+  workspaceId: string,
+  userId: string,
+): WriteContext {
+  return {
     trx,
-    params.tableId,
-    recordId,
-    params.cells,
-    params.sidecarFields,
-    params.sidecarTable,
-  );
+    baseId,
+    workspaceId,
+    changeSeq: mctx.changeSeq,
+    userId,
+    via: "api",
+    redis: ctx.redis,
+    afterCommit: mctx.afterCommit,
+  };
+}
 
-  await sql`
-    UPDATE data.base_runtime
-    SET record_count = record_count + 1, updated_at = now()
-    WHERE base_id = ${params.baseId}
-  `.execute(trx);
-
-  return recordId;
+function recordUuid(raw: string): string {
+  return parsePid(raw, "rec");
 }
 
 export async function registerRecordsRoutes(
@@ -113,415 +138,365 @@ export async function registerRecordsRoutes(
   ctx: AppContext,
 ): Promise<void> {
   const limits = new LimitsService(ctx.db);
+  const serialize = (tableId: string, ids: string[]) =>
+    serializeRecordsByIds(ctx.db, tableId, ids, { storage: ctx.storage });
 
+  // ---- create ----
   app.post<{ Params: { baseId: string; tableId: string } }>(
     "/v1/bases/:baseId/tables/:tableId/records",
     async (request, reply) => {
       try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-        const baseId = parsePid(request.params.baseId, "bas");
-        const tableId = parsePid(request.params.tableId, "tbl");
-        const body = recordBody.parse(request.body);
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const snapshot = await compileForUser(ctx.db, user.id, baseId);
-        assertCan(snapshot, "record.create");
-
-        await limits.assertCanCreateRecord(table.orgId, baseId, 1);
-
-        const fieldRows = await loadTableFields(ctx.db, tableId);
-        const sidecarFields = await loadSidecarFields(ctx.db, tableId);
-        const sidecarTable = await loadSidecarTableMeta(
+        const r = await resolve(ctx, request, reply, "record.create");
+        if (!r) return;
+        const body = createBody.parse(request.body ?? {});
+        await limits.assertCanCreateRecord(r.table.orgId, r.baseId, 1);
+        let ids: string[] = [];
+        await withBaseTx(
           ctx.db,
-          tableId,
-          table.workspaceId,
-          baseId,
-        );
-        const cells = mapInputFieldsToCells(fieldRows, body.fields);
-        let recordId = "";
-
-        const seq = await withBaseTx(
-          ctx.db,
-          {
-            orgId: table.orgId,
-            workspaceId: table.workspaceId,
-            baseId,
-            actor: actor(user),
-            redis: ctx.redis,
-          },
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
           async (mctx, trx) => {
-            recordId = await insertOneRecord(trx, {
-              tableId,
-              baseId,
-              workspaceId: table.workspaceId,
-              userId: user.id,
-              cells,
-              changeSeq: mctx.changeSeq,
-              sidecarFields,
-              sidecarTable,
-            });
-            await afterRecordCellWrite(trx, {
-              redis: ctx.redis,
-              baseId,
-              workspaceId: table.workspaceId,
-              tableId,
-              recordId,
-              fieldRows,
-              cells,
-              changedSlots: cells,
-            });
+            const res = await createRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              [{ fields: body.fields }],
+              { ...(body.typecast !== undefined ? { typecast: body.typecast } : {}) },
+            );
+            ids = res.ids;
             return {
               kind: "records" as const,
-              ops: [{ op: "record.created", recordId, cells }],
-              inverseOps: [{ op: "record.deleted", recordId }],
-              tableIds: [tableId],
+              ops: [
+                { op: "record.created", tableId: r.tableId, recordId: ids[0] },
+                ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
+                ...computeOps(res.compute),
+              ],
+              inverseOps: [{ op: "record.deleted", tableId: r.tableId, recordId: ids[0] }],
+              tableIds: touchedTableIds(r.tableId, res.compute),
               eventType: "record.created",
               aggregateType: "record",
-              aggregateId: recordId,
-              payload: { tableId },
+              aggregateId: ids[0]!,
+              payload: { tableId: r.tableId, recordId: ids[0] },
             };
           },
         );
-
-        void reply.code(201).send({
-          record: {
-            id: pid("rec", recordId),
-            version: 1,
-            createdAt: new Date().toISOString(),
-            fields: Object.fromEntries(
-              Object.entries(cells).map(([slot, value]) => {
-                const field = fieldRows.find((f) => String(f.slot) === slot);
-                return field ? [pid("fld", field.id), value] : [slot, value];
-              }),
-            ),
-            changeSeq: seq,
-          },
-        });
+        const [record] = await serialize(r.tableId, ids);
+        void reply.code(201).send({ record });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
     },
   );
 
+  // ---- batch create ----
   app.post<{ Params: { baseId: string; tableId: string } }>(
-    // Fastify/find-my-way cannot host AIP-style "records:batch" (colon = param).
-    // Public API docs keep the colon form; HTTP path uses /batch until a rewrite layer.
     "/v1/bases/:baseId/tables/:tableId/records/batch",
     async (request, reply) => {
       try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-        const baseId = parsePid(request.params.baseId, "bas");
-        const tableId = parsePid(request.params.tableId, "tbl");
-        const body = batchBody.parse(request.body);
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const batchSnapshot = await compileForUser(ctx.db, user.id, baseId);
-        assertCan(batchSnapshot, "record.create");
-
-        await limits.assertCanCreateRecord(
-          table.orgId,
-          baseId,
-          body.records.length,
-        );
-
-        const fieldRows = await loadTableFields(ctx.db, tableId);
-        const sidecarFields = await loadSidecarFields(ctx.db, tableId);
-        const sidecarTable = await loadSidecarTableMeta(
+        const r = await resolve(ctx, request, reply, "record.create");
+        if (!r) return;
+        const body = batchCreateBody.parse(request.body ?? {});
+        await limits.assertCanCreateRecord(r.table.orgId, r.baseId, body.records.length);
+        let ids: string[] = [];
+        await withBaseTx(
           ctx.db,
-          tableId,
-          table.workspaceId,
-          baseId,
-        );
-        const createdIds: string[] = [];
-
-        const seq = await withBaseTx(
-          ctx.db,
-          {
-            orgId: table.orgId,
-            workspaceId: table.workspaceId,
-            baseId,
-            actor: actor(user),
-            redis: ctx.redis,
-          },
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
           async (mctx, trx) => {
-            const ops: unknown[] = [];
-            for (const item of body.records) {
-              const cells = mapInputFieldsToCells(fieldRows, item.fields);
-              const recordId = item.id
-                ? parsePid(item.id, "rec")
-                : undefined;
-              const id = await insertOneRecord(trx, {
-                tableId,
-                baseId,
-                workspaceId: table.workspaceId,
-                userId: user.id,
-                cells,
-                changeSeq: mctx.changeSeq,
-                sidecarFields,
-                sidecarTable,
-                ...(recordId !== undefined ? { recordId } : {}),
-              });
-              await afterRecordCellWrite(trx, {
-                redis: ctx.redis,
-                baseId,
-                workspaceId: table.workspaceId,
-                tableId,
-                recordId: id,
-                fieldRows,
-                cells,
-                changedSlots: cells,
-              });
-              createdIds.push(id);
-              ops.push({ op: "record.created", recordId: id });
-            }
+            const res = await createRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              body.records.map((x) => ({ fields: x.fields, ...(x.id ? { id: x.id } : {}) })),
+              { ...(body.typecast !== undefined ? { typecast: body.typecast } : {}) },
+            );
+            ids = res.ids;
             return {
               kind: "bulk" as const,
-              ops,
-              tableIds: [tableId],
+              ops: [
+                { op: "records.created", tableId: r.tableId, recordIds: ids },
+                ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
+                ...computeOps(res.compute),
+              ],
+              inverseOps: ids.map((recordId) => ({ op: "record.deleted", tableId: r.tableId, recordId })),
+              tableIds: touchedTableIds(r.tableId, res.compute),
               eventType: "records.batch_created",
               aggregateType: "table",
-              aggregateId: tableId,
-              payload: { count: createdIds.length },
+              aggregateId: r.tableId,
+              payload: { tableId: r.tableId, recordIds: ids, count: ids.length },
             };
           },
         );
-
-        void reply.code(201).send({
-          records: createdIds.map((id) => ({ id: pid("rec", id) })),
-          changeSeq: seq,
-        });
+        const records = await serialize(r.tableId, ids);
+        void reply.code(201).send({ records });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
     },
   );
 
+  // ---- batch patch ----
+  app.patch<{ Params: { baseId: string; tableId: string } }>(
+    "/v1/bases/:baseId/tables/:tableId/records/batch",
+    async (request, reply) => {
+      try {
+        const r = await resolve(ctx, request, reply, "record.update");
+        if (!r) return;
+        const body = batchPatchBody.parse(request.body ?? {});
+        const items = body.records.map((x) => ({
+          id: recordUuid(x.id),
+          fields: x.fields,
+          ...(x.version !== undefined ? { expectedVersion: x.version } : {}),
+        }));
+        await withBaseTx(
+          ctx.db,
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
+          async (mctx, trx) => {
+            const res = await updateRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              items,
+              { ...(body.typecast !== undefined ? { typecast: body.typecast } : {}) },
+            );
+            return {
+              kind: "bulk" as const,
+              ops: [
+                ...items.map((it) => ({ op: "record.updated", tableId: r.tableId, recordId: it.id, cells: res.after.get(it.id) })),
+                ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
+                ...computeOps(res.compute),
+              ],
+              inverseOps: items.map((it) => ({
+                op: "record.updated",
+                tableId: r.tableId,
+                recordId: it.id,
+                cells: res.before.get(it.id),
+              })),
+              tableIds: touchedTableIds(r.tableId, res.compute),
+              eventType: "records.batch_updated",
+              aggregateType: "table",
+              aggregateId: r.tableId,
+              payload: { tableId: r.tableId, recordIds: items.map((i) => i.id) },
+            };
+          },
+        );
+        const records = await serialize(r.tableId, items.map((i) => i.id));
+        void reply.send({ records });
+      } catch (err) {
+        handleRouteError(request, reply, err);
+      }
+    },
+  );
+
+  // ---- batch delete ----
+  app.post<{ Params: { baseId: string; tableId: string } }>(
+    "/v1/bases/:baseId/tables/:tableId/records/batch-delete",
+    async (request, reply) => {
+      try {
+        const r = await resolve(ctx, request, reply, "record.delete");
+        if (!r) return;
+        const body = batchDeleteBody.parse(request.body ?? {});
+        const ids = body.ids.map(recordUuid);
+        await withBaseTx(
+          ctx.db,
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
+          async (mctx, trx) => {
+            const res = await deleteRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              ids,
+            );
+            return {
+              kind: "bulk" as const,
+              ops: [
+                { op: "records.soft_deleted", tableId: r.tableId, recordIds: res.ids, batchId: res.batchId },
+                ...computeOps(res.compute),
+              ],
+              inverseOps: [{ op: "record.restore", batchId: res.batchId }],
+              tableIds: touchedTableIds(r.tableId, res.compute),
+              eventType: "records.batch_deleted",
+              aggregateType: "table",
+              aggregateId: r.tableId,
+              payload: { tableId: r.tableId, recordIds: res.ids, batchId: res.batchId },
+            };
+          },
+        );
+        void reply.code(204).send();
+      } catch (err) {
+        handleRouteError(request, reply, err);
+      }
+    },
+  );
+
+  // ---- patch one ----
   app.patch<{ Params: { baseId: string; tableId: string; recordId: string } }>(
     "/v1/bases/:baseId/tables/:tableId/records/:recordId",
     async (request, reply) => {
       try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-        const baseId = parsePid(request.params.baseId, "bas");
-        const tableId = parsePid(request.params.tableId, "tbl");
-        const recordId = parsePid(request.params.recordId, "rec");
-        const body = recordBody.parse(request.body);
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const updateSnapshot = await compileForUser(ctx.db, user.id, baseId);
-        assertCan(updateSnapshot, "record.update");
-
+        const r = await resolve(ctx, request, reply, "record.update");
+        if (!r) return;
+        const recordId = recordUuid(request.params.recordId);
+        const body = patchBody.parse(request.body ?? {});
         const ifMatch = request.headers["if-match"];
-        const expectedVersion =
-          ifMatch !== undefined
-            ? Number(ifMatch.replace(/"/g, ""))
-            : body.version;
-
-        const fieldRows = await loadTableFields(ctx.db, tableId);
-        const sidecarFields = await loadSidecarFields(ctx.db, tableId);
-        const sidecarTable = await loadSidecarTableMeta(
+        let expectedVersion = body.version;
+        if (typeof ifMatch === "string" && ifMatch.trim() !== "" && ifMatch.trim() !== "*") {
+          const n = Number(ifMatch.replace(/^W\//, "").replace(/"/g, ""));
+          if (!Number.isInteger(n) || n < 1) throw new ApiError(422, "VALIDATION_FAILED", "Invalid If-Match header");
+          expectedVersion = n;
+        }
+        await withBaseTx(
           ctx.db,
-          tableId,
-          table.workspaceId,
-          baseId,
-        );
-        const patchCells = mapInputFieldsToCells(fieldRows, body.fields);
-
-        const seq = await withBaseTx(
-          ctx.db,
-          {
-            orgId: table.orgId,
-            workspaceId: table.workspaceId,
-            baseId,
-            actor: actor(user),
-            redis: ctx.redis,
-          },
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
           async (mctx, trx) => {
-            const existing = await sql<{
-              cells: unknown;
-              version: string;
-            }>`
-              SELECT cells, version FROM data.records
-              WHERE table_id = ${tableId} AND id = ${recordId} AND deleted_at IS NULL
-              FOR UPDATE
-            `.execute(trx);
-
-            const row = existing.rows[0];
-            if (!row) {
-              throw new Error("RECORD_NOT_FOUND");
-            }
-
-            const currentVersion = Number(row.version);
-            if (
-              expectedVersion !== undefined &&
-              !Number.isNaN(expectedVersion) &&
-              expectedVersion !== currentVersion
-            ) {
-              throw new Error("VERSION_CONFLICT");
-            }
-
-            const merged = {
-              ...(row.cells as Record<string, unknown>),
-              ...patchCells,
-            };
-
-            await sql`
-              UPDATE data.records
-              SET cells = ${JSON.stringify(merged)}::jsonb,
-                  version = version + 1,
-                  updated_by = ${user.id},
-                  updated_at = now(),
-                  last_change_seq = ${mctx.changeSeq}
-              WHERE table_id = ${tableId} AND id = ${recordId}
-            `.execute(trx);
-
-            await upsertSidecars(
-              trx,
-              tableId,
-              recordId,
-              merged,
-              sidecarFields,
-              sidecarTable,
+            const writer = await TableWriter.load(trx, r.tableId);
+            const res = await updateRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              [{ id: recordId, fields: body.fields, ...(expectedVersion !== undefined ? { expectedVersion } : {}) }],
+              { writer, ...(body.typecast !== undefined ? { typecast: body.typecast } : {}) },
             );
-
-            await afterRecordCellWrite(trx, {
-              redis: ctx.redis,
-              baseId,
-              workspaceId: table.workspaceId,
-              tableId,
-              recordId,
-              fieldRows,
-              cells: merged,
-              changedSlots: patchCells,
-            });
-
+            const version = res.versions.get(recordId);
             return {
               kind: "records" as const,
-              ops: [{ op: "record.updated", recordId, cells: merged }],
-              inverseOps: [
-                {
-                  op: "record.updated",
-                  recordId,
-                  cells: row.cells as Record<string, unknown>,
-                },
+              ops: [
+                { op: "record.updated", tableId: r.tableId, recordId, cells: res.after.get(recordId) },
+                ...res.configChangedFieldIds.map((fieldId) => ({ op: "field.updated", tableId: r.tableId, fieldId })),
+                ...computeOps(res.compute),
               ],
-              tableIds: [tableId],
+              inverseOps: [{ op: "record.updated", tableId: r.tableId, recordId, cells: res.before.get(recordId) }],
+              tableIds: touchedTableIds(r.tableId, res.compute),
               eventType: "record.updated",
               aggregateType: "record",
               aggregateId: recordId,
-              payload: { version: currentVersion + 1 },
+              payload: { tableId: r.tableId, recordId, version },
             };
           },
         );
-
-        void reply.send({
-          record: { id: pid("rec", recordId), changeSeq: seq },
-        });
+        const [record] = await serialize(r.tableId, [recordId]);
+        if (record) void reply.header("etag", `"${record.version}"`);
+        void reply.send({ record });
       } catch (err) {
-        if (err instanceof Error && err.message === "VERSION_CONFLICT") {
-          conflict(request, reply, "Record version mismatch");
-          return;
-        }
-        if (err instanceof Error && err.message === "RECORD_NOT_FOUND") {
-          notFound(request, reply, "Record not found");
-          return;
-        }
         handleRouteError(request, reply, err);
       }
     },
   );
 
+  // ---- delete one ----
   app.delete<{ Params: { baseId: string; tableId: string; recordId: string } }>(
     "/v1/bases/:baseId/tables/:tableId/records/:recordId",
     async (request, reply) => {
       try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-        const baseId = parsePid(request.params.baseId, "bas");
-        const tableId = parsePid(request.params.tableId, "tbl");
-        const recordId = parsePid(request.params.recordId, "rec");
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const deleteSnapshot = await compileForUser(ctx.db, user.id, baseId);
-        assertCan(deleteSnapshot, "record.delete");
-
+        const r = await resolve(ctx, request, reply, "record.delete");
+        if (!r) return;
+        const recordId = recordUuid(request.params.recordId);
         await withBaseTx(
           ctx.db,
-          {
-            orgId: table.orgId,
-            workspaceId: table.workspaceId,
-            baseId,
-            actor: actor(user),
-            redis: ctx.redis,
-          },
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
           async (mctx, trx) => {
-            const batchId = await createDeletionBatchInTx(trx, {
-              workspaceId: table.workspaceId,
-              baseId,
-              userId: user.id,
-            });
-            await sql`
-              UPDATE data.records
-              SET deleted_at = now(), deleted_by = ${user.id}, updated_at = now(),
-                  deletion_batch_id = ${batchId},
-                  last_change_seq = ${mctx.changeSeq}
-              WHERE table_id = ${tableId} AND id = ${recordId} AND deleted_at IS NULL
-            `.execute(trx);
-            await sql`
-              UPDATE data.record_links
-              SET deletion_batch_id = ${batchId}
-              WHERE base_id = ${baseId}
-                AND (a_record_id = ${recordId} OR b_record_id = ${recordId})
-                AND deletion_batch_id IS NULL
-            `.execute(trx);
-            await deleteSidecars(trx, tableId, recordId);
-            await sql`
-              UPDATE data.tables SET record_count = GREATEST(record_count - 1, 0) WHERE id = ${tableId}
-            `.execute(trx);
+            const res = await deleteRecordsInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              [recordId],
+            );
             return {
               kind: "records" as const,
-              ops: [{ op: "record.soft_deleted", recordId, batchId }],
-              inverseOps: [{ op: "record.restore", batchId }],
-              tableIds: [tableId],
+              ops: [
+                { op: "record.soft_deleted", tableId: r.tableId, recordId, batchId: res.batchId },
+                ...computeOps(res.compute),
+              ],
+              inverseOps: [{ op: "record.restore", batchId: res.batchId }],
+              tableIds: touchedTableIds(r.tableId, res.compute),
               eventType: "record.deleted",
               aggregateType: "record",
               aggregateId: recordId,
-              payload: {},
+              payload: { tableId: r.tableId, recordId, batchId: res.batchId },
             };
           },
         );
-
         void reply.code(204).send();
+      } catch (err) {
+        handleRouteError(request, reply, err);
+      }
+    },
+  );
+
+  // ---- duplicate ----
+  app.post<{ Params: { baseId: string; tableId: string; recordId: string } }>(
+    "/v1/bases/:baseId/tables/:tableId/records/:recordId/duplicate",
+    async (request, reply) => {
+      try {
+        const r = await resolve(ctx, request, reply, "record.create");
+        if (!r) return;
+        const sourceId = recordUuid(request.params.recordId);
+        await limits.assertCanCreateRecord(r.table.orgId, r.baseId, 1);
+        let newId = "";
+        await withBaseTx(
+          ctx.db,
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
+          async (mctx, trx) => {
+            const res = await duplicateRecordInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              sourceId,
+            );
+            newId = res.ids[0]!;
+            return {
+              kind: "records" as const,
+              ops: [
+                { op: "record.created", tableId: r.tableId, recordId: newId, duplicatedFrom: sourceId },
+                ...computeOps(res.compute),
+              ],
+              inverseOps: [{ op: "record.deleted", tableId: r.tableId, recordId: newId }],
+              tableIds: touchedTableIds(r.tableId, res.compute),
+              eventType: "record.created",
+              aggregateType: "record",
+              aggregateId: newId,
+              payload: { tableId: r.tableId, recordId: newId, duplicatedFrom: pid("rec", sourceId) },
+            };
+          },
+        );
+        const [record] = await serialize(r.tableId, [newId]);
+        void reply.code(201).send({ record });
+      } catch (err) {
+        handleRouteError(request, reply, err);
+      }
+    },
+  );
+
+  // ---- move (manual order) ----
+  app.post<{ Params: { baseId: string; tableId: string; recordId: string } }>(
+    "/v1/bases/:baseId/tables/:tableId/records/:recordId/move",
+    async (request, reply) => {
+      try {
+        const r = await resolve(ctx, request, reply, "record.update");
+        if (!r) return;
+        const recordId = recordUuid(request.params.recordId);
+        const body = moveBody.parse(request.body ?? {});
+        const beforeId = body.before ? recordUuid(body.before) : null;
+        const afterId = body.after ? recordUuid(body.after) : null;
+        await withBaseTx(
+          ctx.db,
+          { orgId: r.table.orgId, workspaceId: r.table.workspaceId, baseId: r.baseId, actor: actor(r.user), redis: ctx.redis },
+          async (mctx, trx) => {
+            const old = await sql<{ manual_order: string }>`
+              SELECT manual_order FROM data.records WHERE table_id = ${r.tableId} AND id = ${recordId}
+            `.execute(trx);
+            const key = await moveRecordInTx(
+              writeCtx(ctx, mctx, trx, r.baseId, r.table.workspaceId, r.userId),
+              r.tableId,
+              recordId,
+              { beforeId, afterId },
+            );
+            const oldKey = old.rows[0]?.manual_order;
+            return {
+              kind: "records" as const,
+              ops: [{ op: "record.moved", tableId: r.tableId, recordId, manualOrder: key }],
+              inverseOps: oldKey ? [{ op: "record.moved", tableId: r.tableId, recordId, manualOrder: oldKey }] : null,
+              tableIds: [r.tableId],
+              eventType: "record.moved",
+              aggregateType: "record",
+              aggregateId: recordId,
+              payload: { tableId: r.tableId, recordId },
+            };
+          },
+        );
+        const [record] = await serialize(r.tableId, [recordId]);
+        void reply.send({ record });
       } catch (err) {
         handleRouteError(request, reply, err);
       }

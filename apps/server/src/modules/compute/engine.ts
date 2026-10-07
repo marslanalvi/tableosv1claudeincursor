@@ -313,11 +313,11 @@ class ComputeRun {
   private async userNames(ids: string[]): Promise<void> {
     const missing = ids.filter((id) => !this.users.has(id));
     if (missing.length === 0) return;
-    const r = await sql<{ id: string; name: string | null; email: string }>`
-      SELECT id, name, email FROM core.users WHERE id = ANY(${missing}::uuid[])
+    const r = await sql<{ id: string; display_name: string | null; email: string }>`
+      SELECT id, display_name, email FROM core.users WHERE id = ANY(${missing}::uuid[])
     `.execute(db(this.trx));
     for (const id of missing) this.users.set(id, "");
-    for (const u of r.rows) this.users.set(u.id, u.name || u.email);
+    for (const u of r.rows) this.users.set(u.id, u.display_name || u.email);
   }
 
   private async attachmentNames(ids: string[]): Promise<void> {

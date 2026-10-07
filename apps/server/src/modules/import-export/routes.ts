@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../../lib/app-context.js";
 import { parsePid, pid } from "../../lib/public-ids.js";
-import { notFound, validationProblem } from "../../http/errors.js";
+import { ApiError, notFound, validationProblem } from "../../http/errors.js";
 import { resolveBaseContext, resolveTableContext } from "../access/helpers.js";
 import { assertCan } from "../access/assert.js";
 import { compileForUser } from "../access/compile.js";
@@ -12,6 +12,7 @@ import { LimitsService } from "../billing/limits-service.js";
 import { executeRecordQuery } from "../query/execute-record-query.js";
 import { loadView } from "../share/service.js";
 import { handleWave4Error } from "../wave4/problems.js";
+import { createRecords, type WriteScope } from "../wave4/record-writer.js";
 import { exportValue, toCsv, type ExportField } from "./format.js";
 import { buildXlsx } from "./xlsx.js";
 
@@ -46,53 +47,30 @@ export async function registerImportExportRoutes(
   const limits = new LimitsService(ctx.db);
 
   /**
-   * Create records through B's batch write route (validation, typecast,
-   * links, compute, one change per batch) by injecting with the caller's
-   * session. Returns the created count and per-row errors.
+   * Create records through B's write path (`records/write.ts`: validation,
+   * typecast, links, compute; one base change per batch). A failing batch is
+   * bisected so only the bad rows are reported.
    */
   async function writeBatch(
-    request: FastifyRequest,
-    baseParam: string,
-    tableParam: string,
+    scope: WriteScope,
     rows: Record<string, unknown>[],
     typecast: boolean,
     rowOffset: number,
   ): Promise<{ created: number; errors: RowError[] }> {
-    const url = `/v1/bases/${baseParam}/tables/${tableParam}/records/batch`;
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (request.headers.cookie) headers["cookie"] = request.headers.cookie;
-    const res = await app.inject({
-      method: "POST",
-      url,
-      headers,
-      payload: JSON.stringify({ records: rows.map((fields) => ({ fields })), typecast }),
-    });
-    if (res.statusCode < 300) {
-      const body = res.json() as { records?: unknown[] };
-      return { created: body.records?.length ?? rows.length, errors: [] };
-    }
-    if (rows.length === 1) {
-      let message = `Failed (${res.statusCode})`;
-      try {
-        const p = res.json() as { detail?: string; title?: string; errors?: { message: string }[] };
-        message = p.errors?.map((e) => e.message).join("; ") || p.detail || p.title || message;
-      } catch {
-        /* keep default */
+    try {
+      const ids = await createRecords(ctx, scope, rows.map((fields) => ({ fields })), typecast);
+      return { created: ids.length, errors: [] };
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 500;
+      if (status !== 422) throw err;
+      if (rows.length === 1) {
+        return { created: 0, errors: [{ row: rowOffset + 1, message: (err as Error).message }] };
       }
-      if (res.statusCode >= 500 || res.statusCode === 401 || res.statusCode === 403 || res.statusCode === 402) {
-        throw Object.assign(new Error(message), { statusCode: res.statusCode });
-      }
-      return { created: 0, errors: [{ row: rowOffset + 1, message }] };
+      const mid = Math.ceil(rows.length / 2);
+      const left = await writeBatch(scope, rows.slice(0, mid), typecast, rowOffset);
+      const right = await writeBatch(scope, rows.slice(mid), typecast, rowOffset + mid);
+      return { created: left.created + right.created, errors: [...left.errors, ...right.errors] };
     }
-    if (res.statusCode === 401 || res.statusCode === 403 || res.statusCode === 402) {
-      const p = res.json() as { detail?: string };
-      throw Object.assign(new Error(p.detail ?? "Import not allowed"), { statusCode: res.statusCode });
-    }
-    // Bisect to isolate the bad rows.
-    const mid = Math.ceil(rows.length / 2);
-    const left = await writeBatch(request, baseParam, tableParam, rows.slice(0, mid), typecast, rowOffset);
-    const right = await writeBatch(request, baseParam, tableParam, rows.slice(mid), typecast, rowOffset + mid);
-    return { created: left.created + right.created, errors: [...left.errors, ...right.errors] };
   }
 
   async function handleImport(request: FastifyRequest<{ Params: { baseId: string } }>, reply: FastifyReply) {
@@ -145,16 +123,18 @@ export async function registerImportExportRoutes(
 
     let imported = 0;
     const errors: RowError[] = [];
+    const scope: WriteScope = {
+      orgId: base.orgId,
+      workspaceId: base.workspaceId,
+      baseId,
+      tableId,
+      actor: { actorType: "user", actorId: user.id, sessionId: user.sessionId, via: "api" },
+      userId: user.id,
+      via: "import",
+    };
     for (let i = 0; i < body.rows.length; i += BATCH) {
       const chunk = body.rows.slice(i, i + BATCH);
-      const r = await writeBatch(
-        request,
-        pid("bas", baseId),
-        pid("tbl", tableId),
-        chunk,
-        body.typecast,
-        body.rowOffset + i,
-      );
+      const r = await writeBatch(scope, chunk, body.typecast, body.rowOffset + i);
       imported += r.created;
       errors.push(...r.errors);
     }
@@ -193,7 +173,7 @@ export async function registerImportExportRoutes(
     try {
       await handleImport(request, reply);
     } catch (err) {
-      sendImportError(request, reply, err);
+      handleWave4Error(request, reply, err);
     }
   });
   // Legacy path (same body).
@@ -201,21 +181,9 @@ export async function registerImportExportRoutes(
     try {
       await handleImport(request, reply);
     } catch (err) {
-      sendImportError(request, reply, err);
+      handleWave4Error(request, reply, err);
     }
   });
-
-  function sendImportError(request: FastifyRequest, reply: FastifyReply, err: unknown) {
-    const status = (err as { statusCode?: number })?.statusCode;
-    if (status && err instanceof Error) {
-      void reply
-        .code(status)
-        .header("content-type", "application/problem+json")
-        .send({ code: status === 402 ? "PLAN_LIMIT_EXCEEDED" : "FORBIDDEN", title: "Import failed", status, detail: err.message, requestId: request.id });
-      return;
-    }
-    handleWave4Error(request, reply, err);
-  }
 
   // ─────────────────────────── Export ───────────────────────────
 

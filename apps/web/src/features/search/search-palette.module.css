@@ -1,54 +1,174 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.35);
-  z-index: 60;
-  display: grid;
-  place-items: start center;
-  padding-top: 12vh;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: rgba(24, 29, 38, 0.32);
 }
 
 .panel {
-  width: min(520px, 92vw);
+  width: min(640px, 100%);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
   background: var(--tabula-color-bg-elevated);
   border-radius: var(--tabula-radius-lg);
-  padding: var(--tabula-space-4);
-  box-shadow: var(--tabula-shadow-md);
+  box-shadow: var(--tabula-shadow-lg);
+  font-family: var(--tabula-font-sans);
+  color: var(--tabula-color-text);
+  overflow: hidden;
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--tabula-color-border);
+}
+
+.searchIcon {
+  font-size: 20px;
+  color: var(--tabula-color-text-muted);
+}
+
+.input {
+  flex: 1;
+  height: 56px;
+  border: 0;
+  outline: none;
+  font: inherit;
+  font-size: var(--tabula-font-size-lg);
+  color: var(--tabula-color-text);
+  background: transparent;
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--tabula-color-border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--tabula-color-text-muted);
+  background: var(--tabula-color-bg-subtle);
+  text-align: center;
 }
 
 .results {
   list-style: none;
-  margin: var(--tabula-space-3) 0 0;
-  padding: 0;
-  max-height: 320px;
-  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
 }
 
-.resultBtn {
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: transparent;
-  padding: var(--tabula-space-2) var(--tabula-space-3);
+.group {
+  padding: 10px 10px 4px;
+  font-size: var(--tabula-font-size-xs);
+  font-weight: 500;
+  color: var(--tabula-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.groupList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
   border-radius: var(--tabula-radius-sm);
   cursor: pointer;
-  font: inherit;
 }
 
-.resultBtn:hover {
+.resultActive {
+  composes: result;
   background: var(--tabula-color-accent-subtle);
 }
 
 .kind {
-  display: inline-block;
-  min-width: 3rem;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--tabula-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--tabula-color-text);
+  background: var(--tabula-color-bg-strong);
+}
+
+.kind[data-kind="base"] {
+  background: var(--tabula-color-signature-peach);
+}
+
+.kind[data-kind="table"] {
+  background: var(--tabula-color-signature-mint);
+}
+
+.kind[data-kind="record"] {
+  background: var(--tabula-color-signature-cream);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  font-size: var(--tabula-font-size-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtitle {
   font-size: var(--tabula-font-size-sm);
   color: var(--tabula-color-text-muted);
-  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mark {
+  background: #fff1b8;
+  color: inherit;
+  border-radius: 2px;
+}
+
+.enter {
+  color: var(--tabula-color-text-muted);
+  font-size: 13px;
 }
 
 .empty {
-  padding: var(--tabula-space-3);
+  padding: 24px 12px;
+  text-align: center;
   color: var(--tabula-color-text-muted);
-  font-size: var(--tabula-font-size-sm);
+  font-size: var(--tabula-font-size-md);
+}
+
+.footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--tabula-color-border);
+  font-size: var(--tabula-font-size-xs);
+  color: var(--tabula-color-text-muted);
+  background: var(--tabula-color-bg-subtle);
 }

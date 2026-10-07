@@ -1,20 +1,23 @@
 .row {
   display: flex;
   align-items: center;
-  gap: var(--tabula-space-1);
-  margin-left: auto;
 }
 
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--tabula-color-accent);
-  color: var(--tabula-color-text-inverse);
-  font-size: 0.65rem;
-  font-weight: 600;
+.ring {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid var(--tabula-color-bg-elevated);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  padding: 1px;
+  background: var(--tabula-color-bg);
+  margin-left: -6px;
+}
+
+.ring:first-child {
+  margin-left: 0;
+}
+
+.more {
+  margin-left: 6px;
+  font-size: var(--tabula-font-size-sm);
+  color: var(--tabula-color-text-muted);
 }

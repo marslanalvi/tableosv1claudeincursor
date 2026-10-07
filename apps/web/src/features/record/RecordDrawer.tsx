@@ -145,7 +145,7 @@ export function RecordDrawer({ baseId, tableId, recordId, onClose, onNavigate, h
       const copy = await recordsApi.duplicate(baseId, tableId, rec.id, input);
       void qc.invalidateQueries({ queryKey: ["records", baseId, tableId] });
       toastInfo("Record duplicated");
-      onNavigate?.(copy.id);
+      if (copy) onNavigate?.(copy.id);
     } catch (e) {
       toastError(`Couldn't duplicate: ${errorMessage(e)}`);
     }

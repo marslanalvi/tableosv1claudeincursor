@@ -41,10 +41,17 @@ export function newClientOpId(): string {
   return `cop_${Date.now().toString(36)}_${opSeq}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Server copy of a record from a write response; `null` when the body was empty. */
 function unwrapRecord(res: unknown): RecordWire {
   const r = res as { record?: RecordWire } & RecordWire;
-  return r && r.record ? r.record : r;
+  return (r && r.record ? r.record : r && r.id ? r : null) as RecordWire;
 }
+
+/**
+ * Reads sent as POST (query) must not carry an Idempotency-Key: request()
+ * adds one to every POST, an empty value opts out (server ignores empty keys).
+ */
+const READ_ONLY_POST = { "Idempotency-Key": "" };
 
 export const recordsApi = {
   query(baseId: string, tableId: string, body: RecordsQueryBody, signal?: AbortSignal) {
@@ -55,6 +62,7 @@ export const recordsApi = {
     if (Array.isArray(clean["sort"]) && (clean["sort"] as unknown[]).length === 0) delete clean["sort"];
     return request<RecordsPage>(`${tbl(baseId, tableId)}/records/query`, {
       method: "POST",
+      headers: READ_ONLY_POST,
       json: clean,
       ...(signal ? { signal } : {}),
     });
@@ -64,7 +72,8 @@ export const recordsApi = {
     return unwrapRecord(await request(`${tbl(baseId, tableId)}/records/${recordId}`));
   },
 
-  async create(baseId: string, tableId: string, fields: Record<string, unknown>, typecast = false) {
+  /** Resolves `null` if the server answered without a body (record was still created). */
+  async create(baseId: string, tableId: string, fields: Record<string, unknown>, typecast = false): Promise<RecordWire | null> {
     return unwrapRecord(
       await request(`${tbl(baseId, tableId)}/records`, {
         method: "POST",
@@ -85,10 +94,13 @@ export const recordsApi = {
           json: { records: chunk.map((fields) => ({ fields })), ...(typecast ? { typecast } : {}) },
           clientOpId: newClientOpId(),
         });
-        out.push(...res.records);
+        out.push(...(res?.records ?? []));
       } catch (e) {
         if (!isNotFound(e)) throw e;
-        for (const fields of chunk) out.push(await recordsApi.create(baseId, tableId, fields, typecast));
+        for (const fields of chunk) {
+          const rec = await recordsApi.create(baseId, tableId, fields, typecast);
+          if (rec) out.push(rec);
+        }
       }
     }
     return out;
@@ -103,7 +115,7 @@ export const recordsApi = {
   ) {
     const headers: Record<string, string> = {};
     if (opts.version !== undefined) headers["If-Match"] = `"${opts.version}"`;
-    return unwrapRecord(
+    const rec = unwrapRecord(
       await request(`${tbl(baseId, tableId)}/records/${recordId}`, {
         method: "PATCH",
         headers,
@@ -115,6 +127,8 @@ export const recordsApi = {
         clientOpId: opts.clientOpId ?? newClientOpId(),
       }),
     );
+    // Contract: PATCH returns the updated record. Tolerate an empty body.
+    return rec ?? (await recordsApi.get(baseId, tableId, recordId));
   },
 
   /** Batch update (bulk paste / fill / clear). Falls back to sequential PATCHes. */
@@ -166,7 +180,7 @@ export const recordsApi = {
     }
   },
 
-  async duplicate(baseId: string, tableId: string, recordId: string, fallbackFields?: Record<string, unknown>) {
+  async duplicate(baseId: string, tableId: string, recordId: string, fallbackFields?: Record<string, unknown>): Promise<RecordWire | null> {
     try {
       return unwrapRecord(
         await request(`${tbl(baseId, tableId)}/records/${recordId}/duplicate`, {

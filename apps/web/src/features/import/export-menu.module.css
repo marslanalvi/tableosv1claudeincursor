@@ -1,0 +1,68 @@
+.wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: 280px;
+  padding: 6px;
+  background: var(--tabula-color-bg-elevated);
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-md);
+  box-shadow: var(--tabula-shadow-md);
+}
+
+.inline {
+  display: flex;
+  flex-direction: column;
+}
+
+.item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--tabula-radius-sm);
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: var(--tabula-color-text);
+  cursor: pointer;
+}
+
+.item:hover:not(:disabled),
+.item:focus-visible {
+  background: var(--tabula-color-bg-subtle);
+  outline: none;
+}
+
+.item:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.icon {
+  width: 20px;
+  text-align: center;
+  color: var(--tabula-color-text-muted);
+  line-height: 20px;
+}
+
+.itemTitle {
+  display: block;
+  font-size: var(--tabula-font-size-md);
+  font-weight: 500;
+}
+
+.itemHint {
+  display: block;
+  font-size: var(--tabula-font-size-xs);
+  color: var(--tabula-color-text-muted);
+  margin-top: 2px;
+}

@@ -1,19 +1,24 @@
 /**
- * Record create/update for wave-4 modules that cannot go through the HTTP
- * record routes (public form submit has no session; contacts).
+ * Record writes for wave-4 modules that cannot go through the HTTP record
+ * routes (public form submit has no session; contacts). Delegates to B's write
+ * path (`records/write.ts`: validation, typecast, links, compute, counters),
+ * wrapped in one base change per call.
  *
- * Mirrors B's write path (cells by slot → insert → sidecars → links/compute →
- * one base change). When B ships `records/write.ts` (`createRecordsInTx`),
- * swap the bodies below to delegate to it.
+ * Inputs are keyed by field **slot** (string) for convenience; values use the
+ * wire input shapes (CONTRACTS §3). Attachment values may be raw uuids.
  */
-import { generateUuidV7, keyBetween } from "@tabula/types";
 import { sql } from "kysely";
 import type { AppContext } from "../../lib/app-context.js";
+import { pid } from "../../lib/public-ids.js";
 import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
-import { loadTableFields, type FieldRow } from "../schema/field-map.js";
-import { afterRecordCellWrite } from "../records/post-write.js";
-import { loadSidecarFields, loadSidecarTableMeta } from "../recordstore/load-meta.js";
-import { upsertSidecars } from "../recordstore/sidecars.js";
+import {
+  computeOps,
+  createRecordsInTx,
+  deleteRecordsInTx,
+  touchedTableIds,
+  updateRecordsInTx,
+  type WriteContext,
+} from "../records/write.js";
 
 export interface WriteScope {
   orgId: string;
@@ -26,22 +31,65 @@ export interface WriteScope {
   via?: "ui" | "api" | "form" | "import";
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** slot-keyed → field-uuid-keyed input (B's writer resolves raw uuids). */
+async function bySlotToFieldInput(
+  ctx: AppContext,
+  tableId: string,
+  rows: Record<string, unknown>[],
+): Promise<Record<string, unknown>[]> {
+  const fields = await sql<{ id: string; slot: number; type: string }>`
+    SELECT id, slot, type FROM data.fields WHERE table_id = ${tableId} AND deleted_at IS NULL
+  `.execute(ctx.db);
+  const bySlot = new Map(fields.rows.map((f) => [String(f.slot), f]));
+  return rows.map((cells) => {
+    const out: Record<string, unknown> = {};
+    for (const [slot, raw] of Object.entries(cells)) {
+      const f = bySlot.get(slot);
+      if (!f) continue;
+      let value = raw;
+      if (f.type === "attachment" && Array.isArray(raw)) {
+        value = raw.map((v) => (typeof v === "string" && UUID_RE.test(v) ? pid("att", v) : v));
+      }
+      out[pid("fld", f.id)] = value === undefined ? null : value;
+    }
+    return out;
+  });
+}
+
+function writeCtx(ctx: AppContext, scope: WriteScope, trx: WriteContext["trx"], changeSeq: number, afterCommit: (fn: () => Promise<void> | void) => void): WriteContext {
+  return {
+    trx,
+    baseId: scope.baseId,
+    workspaceId: scope.workspaceId,
+    changeSeq,
+    userId: scope.userId,
+    via: scope.via ?? "api",
+    redis: ctx.redis,
+    afterCommit,
+  };
+}
+
 export async function createRecordsBySlot(
   ctx: AppContext,
   scope: WriteScope,
   rows: Record<string, unknown>[],
 ): Promise<string[]> {
   if (rows.length === 0) return [];
-  const fieldRows: FieldRow[] = await loadTableFields(ctx.db, scope.tableId);
-  const sidecarFields = await loadSidecarFields(ctx.db, scope.tableId);
-  const sidecarTable = await loadSidecarTableMeta(
-    ctx.db,
-    scope.tableId,
-    scope.workspaceId,
-    scope.baseId,
-  );
-  const ids: string[] = [];
+  const items = (await bySlotToFieldInput(ctx, scope.tableId, rows)).map((fields) => ({ fields }));
+  return createRecords(ctx, scope, items, true);
+}
 
+/** Create records from wire-shaped input (`{fields}` keyed by fld_ id or name). ≤ 500 per call. */
+export async function createRecords(
+  ctx: AppContext,
+  scope: WriteScope,
+  items: { fields: Record<string, unknown> }[],
+  typecast: boolean,
+): Promise<string[]> {
+  if (items.length === 0) return [];
+  let ids: string[] = [];
   await withBaseTx(
     ctx.db,
     {
@@ -52,70 +100,22 @@ export async function createRecordsBySlot(
       redis: ctx.redis,
     },
     async (mctx, trx) => {
-      const last = await sql<{ manual_order: string }>`
-        SELECT manual_order FROM data.records
-        WHERE table_id = ${scope.tableId} AND deleted_at IS NULL
-        ORDER BY manual_order COLLATE "C" DESC LIMIT 1
-      `.execute(trx);
-      let prevKey: string | null = last.rows[0]?.manual_order ?? null;
-      const ops: unknown[] = [];
-
-      for (const cells of rows) {
-        const recordId = generateUuidV7();
-        const rowNum = await sql<{ row_number: string }>`
-          UPDATE data.tables
-          SET next_row_number = next_row_number + 1,
-              record_count = record_count + 1,
-              updated_at = now()
-          WHERE id = ${scope.tableId}
-          RETURNING (next_row_number - 1) AS row_number
-        `.execute(trx);
-        const rowNumber = rowNum.rows[0]?.row_number ?? "1";
-        let manualOrder: string;
-        try {
-          manualOrder = keyBetween(prevKey, null);
-        } catch {
-          manualOrder = keyBetween(null, null);
-        }
-        prevKey = manualOrder;
-
-        await sql`
-          INSERT INTO data.records (
-            table_id, id, workspace_id, base_id, row_number, manual_order, cells,
-            created_by, updated_by, created_via, last_change_seq
-          ) VALUES (
-            ${scope.tableId}, ${recordId}, ${scope.workspaceId}, ${scope.baseId},
-            ${rowNumber}, ${manualOrder}, ${JSON.stringify(cells)}::jsonb,
-            ${scope.userId}, ${scope.userId}, ${viaFor(scope.via)}, ${mctx.changeSeq}
-          )
-        `.execute(trx);
-        await upsertSidecars(trx, scope.tableId, recordId, cells, sidecarFields, sidecarTable);
-        await afterRecordCellWrite(trx, {
-          redis: ctx.redis,
-          baseId: scope.baseId,
-          workspaceId: scope.workspaceId,
-          tableId: scope.tableId,
-          recordId,
-          fieldRows,
-          cells,
-          changedSlots: cells,
-        });
-        ids.push(recordId);
-        ops.push({ op: "record.created", recordId, tableId: scope.tableId, cells });
-      }
-
-      await sql`
-        UPDATE data.base_runtime
-        SET record_count = record_count + ${rows.length}, updated_at = now()
-        WHERE base_id = ${scope.baseId}
-      `.execute(trx);
-
+      const res = await createRecordsInTx(
+        writeCtx(ctx, scope, trx, mctx.changeSeq, (fn) => mctx.afterCommit(fn)),
+        scope.tableId,
+        items,
+        { typecast },
+      );
+      ids = res.ids;
       const single = ids.length === 1;
       return {
         kind: single ? ("records" as const) : ("bulk" as const),
-        ops,
+        ops: [
+          ...ids.map((recordId) => ({ op: "record.created", recordId, tableId: scope.tableId })),
+          ...computeOps(res.compute),
+        ],
         inverseOps: ids.map((recordId) => ({ op: "record.deleted", recordId })),
-        tableIds: [scope.tableId],
+        tableIds: touchedTableIds(scope.tableId, res.compute),
         eventType: single ? "record.created" : "records.batch_created",
         aggregateType: single ? "record" : "table",
         aggregateId: single ? (ids[0] as string) : scope.tableId,
@@ -128,21 +128,14 @@ export async function createRecordsBySlot(
   return ids;
 }
 
-/** Patch cells (by slot) of one record. */
+/** Patch cells (by slot) of one record. `null` clears a cell. */
 export async function updateRecordBySlot(
   ctx: AppContext,
   scope: WriteScope,
   recordId: string,
   patch: Record<string, unknown>,
 ): Promise<void> {
-  const fieldRows = await loadTableFields(ctx.db, scope.tableId);
-  const sidecarFields = await loadSidecarFields(ctx.db, scope.tableId);
-  const sidecarTable = await loadSidecarTableMeta(
-    ctx.db,
-    scope.tableId,
-    scope.workspaceId,
-    scope.baseId,
-  );
+  const [fields] = await bySlotToFieldInput(ctx, scope.tableId, [patch]);
   await withBaseTx(
     ctx.db,
     {
@@ -153,44 +146,22 @@ export async function updateRecordBySlot(
       redis: ctx.redis,
     },
     async (mctx, trx) => {
-      const cur = await sql<{ cells: Record<string, unknown> }>`
-        SELECT cells FROM data.records
-        WHERE table_id = ${scope.tableId} AND id = ${recordId} AND deleted_at IS NULL
-        FOR UPDATE
-      `.execute(trx);
-      const before = cur.rows[0]?.cells ?? {};
-      const next: Record<string, unknown> = { ...before };
-      for (const [slot, value] of Object.entries(patch)) {
-        if (value === null || value === undefined || value === "") delete next[slot];
-        else next[slot] = value;
-      }
-      await sql`
-        UPDATE data.records
-        SET cells = ${JSON.stringify(next)}::jsonb,
-            version = version + 1,
-            updated_at = now(),
-            updated_by = ${scope.userId},
-            last_change_seq = ${mctx.changeSeq}
-        WHERE table_id = ${scope.tableId} AND id = ${recordId}
-      `.execute(trx);
-      await upsertSidecars(trx, scope.tableId, recordId, next, sidecarFields, sidecarTable);
-      await afterRecordCellWrite(trx, {
-        redis: ctx.redis,
-        baseId: scope.baseId,
-        workspaceId: scope.workspaceId,
-        tableId: scope.tableId,
-        recordId,
-        fieldRows,
-        cells: next,
-        changedSlots: patch,
-      });
-      const inverse: Record<string, unknown> = {};
-      for (const slot of Object.keys(patch)) inverse[slot] = before[slot] ?? null;
+      const res = await updateRecordsInTx(
+        writeCtx(ctx, scope, trx, mctx.changeSeq, (fn) => mctx.afterCommit(fn)),
+        scope.tableId,
+        [{ id: recordId, fields: fields ?? {} }],
+        { typecast: true },
+      );
+      const before = res.before.get(recordId) ?? {};
+      const after = res.after.get(recordId) ?? {};
       return {
         kind: "records" as const,
-        ops: [{ op: "record.updated", recordId, tableId: scope.tableId, cells: patch }],
-        inverseOps: [{ op: "record.updated", recordId, cells: inverse }],
-        tableIds: [scope.tableId],
+        ops: [
+          { op: "record.updated", recordId, tableId: scope.tableId, cells: after },
+          ...computeOps(res.compute),
+        ],
+        inverseOps: [{ op: "record.updated", recordId, cells: before }],
+        tableIds: touchedTableIds(scope.tableId, res.compute),
         eventType: "record.updated",
         aggregateType: "record",
         aggregateId: recordId,
@@ -200,17 +171,18 @@ export async function updateRecordBySlot(
   );
 }
 
-function viaFor(via: WriteScope["via"]): string {
-  return via ?? "api";
-}
-
-/** Soft-delete records (counters + one base change). */
+/** Soft-delete records (counters, links, compute; one base change). Returns count deleted. */
 export async function softDeleteRecords(
   ctx: AppContext,
   scope: WriteScope,
   recordIds: string[],
 ): Promise<number> {
   if (recordIds.length === 0) return 0;
+  const live = await sql<{ id: string }>`
+    SELECT id FROM data.records
+    WHERE table_id = ${scope.tableId} AND id = ANY(${recordIds}::uuid[]) AND deleted_at IS NULL
+  `.execute(ctx.db);
+  if (live.rows.length === 0) return 0;
   let deleted = 0;
   await withBaseTx(
     ctx.db,
@@ -221,34 +193,29 @@ export async function softDeleteRecords(
       actor: scope.actor,
       redis: ctx.redis,
     },
-    async (_mctx, trx) => {
-      const res = await sql<{ id: string }>`
-        UPDATE data.records
-        SET deleted_at = now(), deleted_by = ${scope.userId}
-        WHERE table_id = ${scope.tableId} AND id = ANY(${recordIds}::uuid[]) AND deleted_at IS NULL
-        RETURNING id
-      `.execute(trx);
-      deleted = res.rows.length;
-      if (deleted > 0) {
-        await sql`
-          UPDATE data.tables SET record_count = GREATEST(record_count - ${deleted}, 0), updated_at = now()
-          WHERE id = ${scope.tableId}
-        `.execute(trx);
-        await sql`
-          UPDATE data.base_runtime SET record_count = GREATEST(record_count - ${deleted}, 0), updated_at = now()
-          WHERE base_id = ${scope.baseId}
-        `.execute(trx);
-      }
-      const ids = res.rows.map((r) => r.id);
+    async (mctx, trx) => {
+      const res = await deleteRecordsInTx(
+        writeCtx(ctx, scope, trx, mctx.changeSeq, (fn) => mctx.afterCommit(fn)),
+        scope.tableId,
+        live.rows.map((r) => r.id),
+      );
+      deleted = res.ids.length;
       return {
         kind: "records" as const,
-        ops: ids.map((recordId) => ({ op: "record.deleted", recordId, tableId: scope.tableId })),
-        inverseOps: ids.map((recordId) => ({ op: "record.restored", recordId })),
-        tableIds: [scope.tableId],
-        eventType: ids.length === 1 ? "record.deleted" : "records.batch_deleted",
-        aggregateType: ids.length === 1 ? "record" : "table",
-        aggregateId: ids.length === 1 ? (ids[0] as string) : scope.tableId,
-        payload: { tableId: scope.tableId, recordIds: ids, ...(ids.length === 1 ? { recordId: ids[0] } : {}) },
+        ops: [
+          ...res.ids.map((recordId) => ({ op: "record.deleted", recordId, tableId: scope.tableId })),
+          ...computeOps(res.compute),
+        ],
+        inverseOps: [{ op: "record.restore", batchId: res.batchId }],
+        tableIds: touchedTableIds(scope.tableId, res.compute),
+        eventType: res.ids.length === 1 ? "record.deleted" : "records.batch_deleted",
+        aggregateType: res.ids.length === 1 ? "record" : "table",
+        aggregateId: res.ids.length === 1 ? (res.ids[0] as string) : scope.tableId,
+        payload: {
+          tableId: scope.tableId,
+          recordIds: res.ids,
+          ...(res.ids.length === 1 ? { recordId: res.ids[0] } : {}),
+        },
       };
     },
   );

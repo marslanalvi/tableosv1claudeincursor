@@ -1,155 +1,160 @@
+/* Base shell (workstream F), per DESIGN-airtable.md: white canvas, ink type,
+   hairlines, near-black primary actions. */
 .shell {
   height: 100%;
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: var(--tabula-color-bg);
 }
 
 .topBar {
+  height: 56px;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 8px 16px;
-  background: #fff;
+  padding: 0 16px;
+  background: var(--tabula-color-bg);
   border-bottom: 1px solid var(--tabula-color-border);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+}
+
+.homeLink {
+  display: inline-flex;
 }
 
 .logo {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #0d9488, #2563eb);
+  background: var(--tabula-color-primary);
   color: #fff;
   display: grid;
   place-items: center;
-  font-weight: 800;
-  font-size: 0.8rem;
+  font-weight: 500;
+  font-size: 14px;
   flex-shrink: 0;
 }
 
+.baseIcon {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.baseTitleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: var(--tabula-radius-sm);
+  cursor: pointer;
+  min-width: 0;
+  color: var(--tabula-color-text);
+}
+
+.baseTitleBtn:hover {
+  background: var(--tabula-color-bg-subtle);
+}
+
 .baseTitle {
-  margin: 0;
-  font-family: var(--tabula-font-sans);
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-size: var(--tabula-font-size-lg);
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.caret {
+  font-size: 11px;
+  color: var(--tabula-color-text-muted);
 }
 
 .navTabs {
   display: flex;
   gap: 4px;
-  margin-left: 12px;
+  margin-left: 8px;
+  height: 100%;
 }
 
 .navTab {
   border: none;
   background: transparent;
-  padding: 8px 12px;
-  font: inherit;
-  font-weight: 600;
+  padding: 0 12px;
+  font-size: var(--tabula-font-size-md);
+  font-weight: 500;
   color: var(--tabula-color-text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
+  border-top: 2px solid transparent;
 }
 
-.navTabActive {
-  color: #2563eb;
-  border-bottom-color: #2563eb;
+.navTab:hover {
+  color: var(--tabula-color-text);
+}
+
+.navTab[data-active="true"] {
+  color: var(--tabula-color-text);
+  border-bottom-color: var(--tabula-color-primary);
 }
 
 .topActions {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
-.shareBtn {
-  border: none;
-  background: #2563eb;
-  color: #fff;
-  font: inherit;
-  font-weight: 700;
-  padding: 7px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.shareBtn:hover {
-  background: #1d4ed8;
-}
-
-.ghostBtn {
+.undoGroup {
+  display: inline-flex;
   border: 1px solid var(--tabula-color-border);
-  background: #fff;
-  font: inherit;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--tabula-radius-sm);
+  overflow: hidden;
+}
+
+.iconAction {
+  width: 32px;
+  height: 30px;
+  border: none;
+  background: var(--tabula-color-bg);
+  color: var(--tabula-color-text);
+  font-size: 16px;
   cursor: pointer;
+}
+
+.iconAction + .iconAction {
+  border-left: 1px solid var(--tabula-color-border);
+}
+
+.iconAction:hover:not(:disabled) {
+  background: var(--tabula-color-bg-subtle);
+}
+
+.iconAction:disabled {
+  color: var(--tabula-color-border-strong);
+  cursor: default;
 }
 
 .tableBar {
+  flex: none;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px 0 12px;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 12px;
+  min-height: 40px;
   border-bottom: 1px solid var(--tabula-color-border);
-  background: #f8fafc;
-  overflow-x: auto;
-}
-
-.tableTab {
-  border: none;
-  background: transparent;
-  padding: 10px 12px;
-  font: inherit;
-  font-weight: 600;
-  color: var(--tabula-color-text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-
-.tableTab:hover {
-  color: var(--tabula-color-text);
-}
-
-.tableTabActive {
-  color: var(--tabula-color-text);
-  background: #fff;
-  border-bottom-color: #fff;
-  border-left: 1px solid var(--tabula-color-border);
-  border-right: 1px solid var(--tabula-color-border);
-  border-top: 1px solid var(--tabula-color-border);
-  border-radius: 8px 8px 0 0;
-}
-
-.addTableBtn {
-  border: none;
-  background: transparent;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 1.1rem;
-  color: var(--tabula-color-text-muted);
-}
-
-.addTableBtn:hover {
-  background: #e2e8f0;
-  color: var(--tabula-color-text);
+  background: var(--tabula-color-bg-subtle);
 }
 
 .tableBarSpacer {
@@ -175,12 +180,78 @@
   color: var(--tabula-color-text-muted);
 }
 
-.homeLink {
-  font-size: 0.8rem;
-  color: var(--tabula-color-text-muted);
-  text-decoration: none;
+.errorState {
+  margin: 96px auto;
+  max-width: 480px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.homeLink:hover {
-  color: var(--tabula-color-accent);
+.errorState h1 {
+  font-size: var(--tabula-font-size-2xl);
+  font-weight: 400;
+}
+
+.comingSoon {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 96px 24px;
+  background: var(--tabula-color-bg);
+}
+
+.comingSoonCard {
+  max-width: 560px;
+  padding: 48px;
+  border-radius: var(--tabula-radius-lg);
+  background: var(--tabula-color-signature-cream);
+  color: var(--tabula-color-text);
+}
+
+.comingSoonCard h1 {
+  font-size: var(--tabula-font-size-3xl);
+  font-weight: 400;
+  margin: 12px 0 8px;
+}
+
+.comingSoonCard p {
+  color: var(--tabula-color-text-body);
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+
+.comingSoonBadge {
+  display: inline-block;
+  font-size: var(--tabula-font-size-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border-radius: var(--tabula-radius-xs);
+  background: var(--tabula-color-primary);
+  color: #fff;
+}
+
+.comingSoonActions {
+  display: flex;
+  gap: 8px;
+}
+
+.formsTab {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (max-width: 767px) {
+  .navTabs {
+    display: none;
+  }
+  .baseTitle {
+    max-width: 140px;
+  }
 }

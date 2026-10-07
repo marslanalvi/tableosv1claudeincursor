@@ -540,7 +540,7 @@ export async function deleteRecordsInTx(
   const batchId = await createDeletionBatchInTx(trx, {
     workspaceId: ctx.workspaceId,
     baseId: ctx.baseId,
-    userId: ctx.userId ?? "",
+    userId: ctx.userId as string,
   });
   await sql`
     UPDATE data.records

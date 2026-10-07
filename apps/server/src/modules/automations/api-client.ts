@@ -116,7 +116,11 @@ export class AutomationApiClient {
       `/v1/bases/${baseId}/tables/${tableId}/records`,
       { fields, typecast: true },
     );
-    return normalizeRecord(res.record);
+    const rec = normalizeRecord(res.record);
+    if (Object.keys(rec.fields).length === 0 && rec.id) {
+      return (await this.getRecord(baseId, tableId, rec.id)) ?? rec;
+    }
+    return rec;
   }
 
   async updateRecord(
@@ -130,7 +134,12 @@ export class AutomationApiClient {
       `/v1/bases/${baseId}/tables/${tableId}/records/${recordId}`,
       { fields, typecast: true },
     );
-    return normalizeRecord(res.record);
+    const rec = normalizeRecord(res.record);
+    if (Object.keys(rec.fields).length === 0) {
+      // Older write responses omit fields; read the record back.
+      return (await this.getRecord(baseId, tableId, recordId)) ?? rec;
+    }
+    return rec;
   }
 
   async deleteRecord(baseId: string, tableId: string, recordId: string): Promise<void> {

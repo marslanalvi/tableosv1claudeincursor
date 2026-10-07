@@ -31,16 +31,26 @@ export function Popover({
       onClose();
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
+      if (e.key !== "Escape") return;
+      // If focus sits in a nested overlay (e.g. a field editor's option list
+      // rendered outside this panel), let that overlay handle Escape first.
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        !ref.current?.contains(active) &&
+        !anchorRef?.current?.contains(active)
+      ) {
+        return;
       }
+      onClose();
     }
     document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
+    // Capture phase: nested editors may stop propagation of Escape.
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open, onClose, anchorRef]);
   if (!open) return null;

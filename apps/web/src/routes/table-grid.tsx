@@ -177,7 +177,7 @@ export function TableGridPage({
   return (
     <div className={viewStyles.page}>
       <ViewToolbar
-        key={viewKey}
+        key={`toolbar-${viewKey}`}
         baseId={baseId}
         table={table}
         view={activeView}
