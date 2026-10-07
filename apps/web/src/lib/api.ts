@@ -72,6 +72,15 @@ export function newClientOpId(): string {
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+function isImportPath(path: string): boolean {
+  return /\/import(\/csv)?(\?|$)/.test(path);
+}
+
+function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false;
+  return /failed to fetch|networkerror|load failed|network request failed/i.test(err.message);
+}
+
 /** Shared fetch wrapper. Area modules in `lib/api/*.ts` reuse this. */
 export async function request<T>(
   path: string,
@@ -82,10 +91,13 @@ export async function request<T>(
   // Every mutation carries a client op id (echoed back on realtime change
   // frames as `clientMutationId`) and, for data-plane routes, the same value
   // as Idempotency-Key so a retried request is not applied twice.
+  // Import chunks skip Idempotency-Key: bodies are large and a timed-out
+  // first attempt must not replay as an empty/partial cached write.
   if (MUTATING_METHODS.has(method) && !path.startsWith("/v1/auth/")) {
     const opId = init?.clientOpId ?? headers.get("X-Tabula-Client-Op-Id") ?? newClientOpId();
     headers.set("X-Tabula-Client-Op-Id", opId);
     if (
+      !isImportPath(path) &&
       !headers.has("Idempotency-Key") &&
       (path.startsWith("/v1/bases/") || path.startsWith("/v1/workspaces/"))
     ) {
@@ -102,24 +114,41 @@ export async function request<T>(
   const fetchInit: RequestInit = { headers, credentials: "include", method };
   if (body !== undefined) fetchInit.body = body;
   if (init?.signal) fetchInit.signal = init.signal;
-  const response = await fetch(`${API_BASE}${path}`, fetchInit);
 
-  if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/v1/auth/")) {
-      unauthorizedHandler?.(path);
+  const attempts = isImportPath(path) ? 3 : 1;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, fetchInit);
+      if (!response.ok) {
+        if (response.status === 401 && !path.startsWith("/v1/auth/")) {
+          unauthorizedHandler?.(path);
+        }
+        throw new ApiProblemError(await parseProblem(response));
+      }
+      if (response.status === 204) {
+        return undefined as T;
+      }
+      const text = await response.text();
+      if (!text) {
+        return undefined as T;
+      }
+      return JSON.parse(text) as T;
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts && isTransientNetworkError(err) && !init?.signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+        continue;
+      }
+      if (isTransientNetworkError(err)) {
+        throw new Error(
+          "Could not reach the TableOS API. Check that the server is running and try again.",
+        );
+      }
+      throw err;
     }
-    throw new ApiProblemError(await parseProblem(response));
   }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await response.text();
-  if (!text) {
-    return undefined as T;
-  }
-  return JSON.parse(text) as T;
+  throw lastError;
 }
 
 export interface AuthUser {

@@ -879,7 +879,7 @@ async function main(): Promise<void> {
 
   const port = env.REALTIME_PORT;
   httpServer.listen(port, "0.0.0.0", () => {
-    log.info({ port }, "Tabula realtime WebSocket listening");
+    log.info({ port }, "TableOS realtime WebSocket listening");
   });
 }
 

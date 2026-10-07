@@ -20,7 +20,7 @@ export function SignupPage() {
       <main className={authStyles.main}>
         <div className={authStyles.card}>
           <h1 className={authStyles.headline}>Create your account</h1>
-          <p className={authStyles.sub}>Start organizing your work in Tabula.</p>
+          <p className={authStyles.sub}>Start organizing your work in TableOS.</p>
           <form
             className={authStyles.form}
             onSubmit={(e) => {

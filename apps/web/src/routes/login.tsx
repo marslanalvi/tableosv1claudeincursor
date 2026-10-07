@@ -15,7 +15,7 @@ export function AuthTopNav() {
         <span className={authStyles.logo} aria-hidden>
           T
         </span>
-        Tabula
+        TableOS
       </Link>
     </header>
   );
@@ -47,7 +47,7 @@ export function LoginPage() {
               ? "Enter the 6-digit code from your authenticator app."
               : next && next !== "/"
                 ? "Your session ended. Sign in to continue where you left off."
-                : "Welcome back to Tabula."}
+                : "Welcome back to TableOS."}
           </p>
           {mfaToken ? (
             <form
@@ -123,7 +123,7 @@ export function LoginPage() {
             </form>
           )}
           <p className={authStyles.footer}>
-            New to Tabula?{" "}
+            New to TableOS?{" "}
             <Link to="/signup" search={next ? { next } : {}}>
               Create an account
             </Link>

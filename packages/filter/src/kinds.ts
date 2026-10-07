@@ -78,6 +78,8 @@ export function filterKindForField(
     case "autonumber":
     case "count":
       return "number";
+    case "record_id":
+      return "text";
     case "date":
       return "date";
     case "datetime":

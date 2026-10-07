@@ -1,8 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiProblemError, type ViewDto } from "../../lib/api.ts";
+import type { ViewDto } from "../../lib/api.ts";
 import { viewsApi, type ViewVisibility, type ViewWire } from "../../lib/api-areas/views.ts";
+import { toast } from "../../app/toast.tsx";
+import { FloatingPanel } from "../base/floating.tsx";
+import { useBaseRole } from "../grid/field-services.tsx";
 import { VIEW_CREATE_OPTIONS, type ViewKind } from "./view-types.ts";
 import { patchViewInCaches, setViewsInCaches } from "./view-utils.ts";
 import styles from "./views-sidebar.module.css";
@@ -20,12 +23,18 @@ function uniqueName(base: string, views: ViewDto[]): string {
   }
 }
 
-function errorText(err: unknown): string {
-  if (err instanceof ApiProblemError) return err.problem.detail ?? err.problem.title;
-  return err instanceof Error ? err.message : "Something went wrong";
+/** Airtable-style default name: "Kanban", then "Kanban 2"…; "Grid view" counts as "Grid". */
+export function defaultViewName(label: string, views: { name: string }[]): string {
+  const names = new Set(views.map((v) => v.name.trim().toLowerCase()));
+  const l = label.toLowerCase();
+  if (!names.has(l) && !names.has(`${l} view`)) return label;
+  for (let i = 2; ; i += 1) {
+    if (!names.has(`${l} ${i}`) && !names.has(`${l} view ${i}`)) return `${label} ${i}`;
+  }
 }
 
 type Section = "favorites" | "personal" | "collaborative";
+type NewVisibility = "personal" | "collaborative";
 
 export function ViewsSidebar({
   views: viewsProp,
@@ -38,10 +47,14 @@ export function ViewsSidebar({
   views: ViewDto[];
   activeViewId: string | null;
   onSelectView: (viewId: string) => void;
-  /** Return the create promise so a failure is shown in the sidebar. */
+  /**
+   * Create the view and select it. Return the create promise (resolving to
+   * `{view}`) so the sidebar can show failures and put the new view into
+   * rename mode.
+   */
   onCreateView: (
     type: ViewKind,
-    visibility: "personal" | "collaborative",
+    visibility: NewVisibility,
     name?: string,
   ) => void | Promise<unknown>;
   /** Kept for compatibility; favorites are handled here. */
@@ -56,14 +69,19 @@ export function ViewsSidebar({
   const views = viewsProp as ViewWire[];
   const tableId = tableIdProp ?? views.find((v) => v.tableId)?.tableId ?? "";
 
+  const { role } = useBaseRole(baseId);
+  // Until the role loads, assume the common case (editor+); the server has the final say.
+  const canCreateShared = role === undefined || role === "owner" || role === "creator" || role === "editor";
+  const canCreatePersonal = role !== "viewer";
+
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [draft, setDraft] = useState<{ type: ViewKind; name: string; visibility: "personal" | "collaborative" } | null>(null);
+  const [newVisibility, setNewVisibility] = useState<NewVisibility>("collaborative");
+  const [creating, setCreating] = useState<ViewKind | null>(null);
   const [menuViewId, setMenuViewId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState<Record<Section, boolean>>({
     favorites: true,
@@ -71,26 +89,21 @@ export function ViewsSidebar({
     collaborative: true,
   });
   const [drag, setDrag] = useState<{ id: string; over: string | null } | null>(null);
-  const createRef = useRef<HTMLDivElement | null>(null);
+  const createBtnRef = useRef<HTMLButtonElement | null>(null);
+  const createMenuRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Close menus on outside click / Escape.
+  // Close the view options menu on outside click / Escape.
   useEffect(() => {
+    if (!menuViewId) return;
     function onDown(e: MouseEvent) {
-      const t = e.target as Node;
-      if (createOpen && createRef.current && !createRef.current.contains(t)) {
-        setCreateOpen(false);
-        setDraft(null);
-      }
-      if (menuViewId && menuRef.current && !menuRef.current.contains(t)) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuViewId(null);
         setConfirmDeleteId(null);
       }
     }
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      setCreateOpen(false);
-      setDraft(null);
       setMenuViewId(null);
       setConfirmDeleteId(null);
     }
@@ -100,13 +113,13 @@ export function ViewsSidebar({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [createOpen, menuViewId]);
+  }, [menuViewId]);
 
   useEffect(() => {
-    if (!error) return;
-    const t = window.setTimeout(() => setError(null), 5000);
-    return () => window.clearTimeout(t);
-  }, [error]);
+    if (createOpen) createMenuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+  }, [createOpen]);
+
+  const setError = (err: unknown) => toast.error(err);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["views", baseId, tableId] });
@@ -131,7 +144,7 @@ export function ViewsSidebar({
     try {
       await viewsApi.favorite(baseId, tableId, view.id, on);
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
       refresh();
     }
   }
@@ -144,7 +157,7 @@ export function ViewsSidebar({
     try {
       await viewsApi.patch(baseId, tableId, view.id, { name: trimmed });
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
       refresh();
     }
   }
@@ -155,7 +168,7 @@ export function ViewsSidebar({
       patchViewInCaches(qc, baseId, tableId, view.id, () => res.view);
       refresh();
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -171,7 +184,7 @@ export function ViewsSidebar({
       onSelectView(res.view.id);
       refresh();
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -185,7 +198,7 @@ export function ViewsSidebar({
       if (view.id === activeViewId && rest[0]) onSelectView(rest[0].id);
       refresh();
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -201,7 +214,7 @@ export function ViewsSidebar({
     try {
       await viewsApi.reorder(baseId, tableId, ids);
     } catch (err) {
-      setError(errorText(err));
+      setError(err);
       refresh();
     }
   }
@@ -220,17 +233,38 @@ export function ViewsSidebar({
     window.setTimeout(() => setFlashId(null), 1600);
   }
 
-  function startCreate(type: ViewKind, visibility: "personal" | "collaborative" = "collaborative") {
-    const label = viewMeta(type).label;
-    setDraft({ type, visibility, name: uniqueName(label, views) });
+  function openCreate() {
+    if (!createOpen) setNewVisibility(canCreateShared ? "collaborative" : "personal");
+    setCreateOpen((o) => !o);
   }
 
-  function submitCreate() {
-    if (!draft) return;
-    const pending = onCreateView(draft.type, draft.visibility, draft.name.trim() || viewMeta(draft.type).label);
-    setDraft(null);
-    setCreateOpen(false);
-    if (pending) pending.catch((err: unknown) => setError(errorText(err)));
+  /** Airtable: picking a type creates the view at once, selects it and starts renaming it. */
+  async function createView(type: ViewKind) {
+    if (creating) return;
+    const visibility: NewVisibility = canCreateShared ? newVisibility : "personal";
+    const name = defaultViewName(viewMeta(type).label, views);
+    setCreating(type);
+    try {
+      const res = (await onCreateView(type, visibility, name)) as { view?: ViewWire } | undefined;
+      setCreateOpen(false);
+      const created = res?.view;
+      if (created) {
+        const section: Section = created.visibility === "personal" ? "personal" : "collaborative";
+        setSectionsOpen((s) => ({ ...s, [section]: true }));
+        setQuery("");
+        setRenameText(created.name);
+        setRenamingId(created.id);
+        window.setTimeout(() => {
+          document
+            .querySelector(`[data-view-row="${section}-${created.id}"]`)
+            ?.scrollIntoView({ block: "nearest" });
+        }, 30);
+      }
+    } catch (err) {
+      toast.error(err, "Could not create the view");
+    } finally {
+      setCreating(null);
+    }
   }
 
   /* ---------------- render ---------------- */
@@ -471,90 +505,90 @@ export function ViewsSidebar({
         {renderSection("personal", "My personal views", personal, "")}
         {renderSection("collaborative", "Collaborative views", collaborative, "")}
       </div>
-
-      {error ? (
-        <div className={styles.error} role="alert">
-          {error}
-        </div>
-      ) : null}
-
-      <div className={styles.createWrap} ref={createRef}>
+      <div className={styles.createWrap}>
         <button
+          ref={createBtnRef}
           type="button"
           className={styles.createBtn}
+          aria-haspopup="menu"
           aria-expanded={createOpen}
-          onClick={() => {
-            setCreateOpen((o) => !o);
-            setDraft(null);
-          }}
+          disabled={!canCreatePersonal}
+          title={canCreatePersonal ? "Create a view" : "Viewers can't create views"}
+          onClick={openCreate}
         >
           <span>Create…</span>
           <span aria-hidden>{createOpen ? "▾" : "▴"}</span>
         </button>
         {createOpen ? (
-          <div className={styles.createMenu} role="menu">
-            {draft ? (
-              <form
-                className={styles.draftForm}
-                onSubmit={(e) => {
+          <FloatingPanel
+            anchorRef={createBtnRef}
+            placement="top-start"
+            className={styles.createMenu}
+            onClose={() => setCreateOpen(false)}
+          >
+            <div ref={createMenuRef}>
+              <div className={styles.createHead}>
+                <div className={styles.segmented} role="radiogroup" aria-label="Who can see the new view">
+                  {(["collaborative", "personal"] as const).map((v) => {
+                    const disabled = v === "collaborative" && !canCreateShared;
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        role="radio"
+                        aria-checked={newVisibility === v}
+                        disabled={disabled}
+                        title={disabled ? "You need editor access to create collaborative views" : undefined}
+                        className={styles.segment}
+                        onClick={() => setNewVisibility(v)}
+                      >
+                        {v === "collaborative" ? "Collaborative" : "Personal"}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className={styles.createHint}>
+                  {newVisibility === "collaborative"
+                    ? "Everyone in this base can see it."
+                    : "Only you can see and edit it."}
+                </p>
+              </div>
+              <div
+                role="menu"
+                aria-label="Create a view"
+                className={styles.createList}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
                   e.preventDefault();
-                  submitCreate();
+                  const items = Array.from(
+                    e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)"),
+                  );
+                  const i = items.indexOf(document.activeElement as HTMLButtonElement);
+                  items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
                 }}
               >
-                <div className={styles.draftTitle}>
-                  <span style={{ color: viewMeta(draft.type).color }}>{viewMeta(draft.type).icon}</span>
-                  New {viewMeta(draft.type).label.toLowerCase()} view
-                </div>
-                <input
-                  className={styles.renameInput}
-                  autoFocus
-                  aria-label="New view name"
-                  value={draft.name}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                />
-                <div className={styles.radioRow} role="radiogroup" aria-label="Who can edit">
-                  {(["collaborative", "personal"] as const).map((v) => (
-                    <label key={v} className={styles.radio}>
-                      <input
-                        type="radio"
-                        name="view-visibility"
-                        checked={draft.visibility === v}
-                        onChange={() => setDraft({ ...draft, visibility: v })}
-                      />
-                      {v === "collaborative" ? "Collaborative" : "Personal"}
-                    </label>
-                  ))}
-                </div>
-                <div className={styles.confirmActions}>
-                  <button type="button" className={styles.cancelBtn} onClick={() => setDraft(null)}>
-                    Back
+                {VIEW_CREATE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="menuitem"
+                    className={styles.createItem}
+                    disabled={creating !== null}
+                    aria-busy={creating === opt.id}
+                    onClick={() => void createView(opt.id)}
+                  >
+                    <span className={styles.createIcon} style={{ color: opt.color }}>
+                      {opt.icon}
+                    </span>
+                    {opt.label}
+                    <span className={styles.plus} aria-hidden>
+                      {creating === opt.id ? "…" : "+"}
+                    </span>
                   </button>
-                  <button type="submit" className={styles.primaryBtn}>
-                    Create new view
-                  </button>
-                </div>
-              </form>
-            ) : (
-              VIEW_CREATE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  role="menuitem"
-                  className={styles.createItem}
-                  onClick={() => startCreate(opt.id)}
-                >
-                  <span className={styles.createIcon} style={{ color: opt.color }}>
-                    {opt.icon}
-                  </span>
-                  {opt.label}
-                  <span className={styles.plus} aria-hidden>
-                    +
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
+                ))}
+              </div>
+            </div>
+          </FloatingPanel>
         ) : null}
       </div>
     </aside>

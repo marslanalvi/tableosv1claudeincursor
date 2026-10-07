@@ -186,7 +186,7 @@ export async function registerInvitationRoutes(
       try {
         await sendEmail(ctx.db, {
           to: [body.email],
-          subject: `${user.displayName} invited you to ${targetName} on Tabula`,
+          subject: `${user.displayName} invited you to ${targetName} on TableOS`,
           text: `${user.displayName} (${user.email}) invited you to join "${targetName}" as ${body.role}.\n\nAccept the invitation: ${acceptUrl}\n\nThis link expires on ${expiresAt.toUTCString()}.`,
           orgId,
           workspaceId,

@@ -32,7 +32,7 @@ export const ACTIONS: ActionInfo[] = [
   { type: "create_record", label: "Create record", description: "Add a new record to a table.", icon: "＋" },
   { type: "find_records", label: "Find records", description: "Look up records that match conditions.", icon: "⌕" },
   { type: "delete_record", label: "Delete record", description: "Delete a record.", icon: "⌫" },
-  { type: "notify", label: "Send in-app notification", description: "Notify collaborators in Tabula.", icon: "◉" },
+  { type: "notify", label: "Send in-app notification", description: "Notify collaborators in TableOS.", icon: "◉" },
   { type: "send_email", label: "Send email", description: "Send an email to anyone.", icon: "✉" },
   { type: "webhook", label: "Send webhook", description: "POST JSON to an external URL.", icon: "⇢" },
   { type: "condition", label: "Conditional group", description: "Run actions only if conditions are met.", icon: "⑂" },

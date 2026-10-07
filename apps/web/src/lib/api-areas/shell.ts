@@ -63,6 +63,12 @@ export interface TrashField {
   deletedByName: string | null;
 }
 
+/** `GET /v1/bases/:b` also carries the caller's hidden tables. */
+export function hiddenTableIdsOf(base: unknown): string[] {
+  const ids = (base as { hiddenTableIds?: unknown } | null | undefined)?.hiddenTableIds;
+  return Array.isArray(ids) ? (ids as string[]) : [];
+}
+
 export interface TrashListing {
   records: TrashRecord[];
   tables: TrashTable[];
@@ -143,6 +149,13 @@ export const shellApi = {
       method: "POST",
       json: { tableIds },
     });
+  },
+  /** Per-user "Hide table"; 409 when it would hide the last visible table. */
+  setTableHidden(baseId: string, tableId: string, hidden: boolean) {
+    return request<{ tableId: string; hidden: boolean; hiddenTableIds: string[] }>(
+      `/v1/bases/${baseId}/tables/${tableId}/hidden`,
+      { method: "PUT", json: { hidden } },
+    );
   },
 
   // History

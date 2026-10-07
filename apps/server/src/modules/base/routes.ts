@@ -10,6 +10,7 @@ import { userCanAccessWorkspace, resolveBaseContext } from "../access/helpers.js
 import { assertCan } from "../access/assert.js";
 import { compileForWorkspace } from "../access/compile.js";
 import { registerBaseManageRoutes } from "./manage-routes.js";
+import { loadHiddenTableIds, registerTablePrefsRoutes } from "./table-prefs-routes.js";
 import type { MutationActor } from "../../kernel/mutation.js";
 import { runTransactionWithAfterCommit, withBaseTx } from "../../kernel/mutation.js";
 import { bootstrapDefaultTable } from "./bootstrap-default-table.js";
@@ -35,6 +36,7 @@ export async function registerBaseRoutes(
   ctx: AppContext,
 ): Promise<void> {
   await registerBaseManageRoutes(app, ctx);
+  await registerTablePrefsRoutes(app, ctx);
 
   app.post<{ Params: { workspaceId: string } }>(
     "/v1/workspaces/:workspaceId/bases",
@@ -234,6 +236,7 @@ export async function registerBaseRoutes(
           list.push(view);
           viewsByTable.set(view.table_id, list);
         }
+        const hiddenTableIds = await loadHiddenTableIds(ctx.db, user.id, baseId);
 
         void reply.send({
           id: pid("bas", baseId),
@@ -256,6 +259,7 @@ export async function registerBaseRoutes(
                   config: (f.config ?? {}) as Record<string, unknown>,
                   description: f.description ?? "",
                   isComputed: f.is_computed,
+                  tableId: f.table_id,
                 },
                 { primaryFieldId: table.primary_field_id, nameById: fieldNameById },
               ),
@@ -264,6 +268,7 @@ export async function registerBaseRoutes(
               serializeView(v, user.id, viewConfigInfo.get(table.id), viewRights),
             ),
           })),
+          hiddenTableIds: hiddenTableIds.map((id) => pid("tbl", id)),
         });
       } catch (err) {
         handleRouteError(request, reply, err);

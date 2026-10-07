@@ -167,6 +167,8 @@ export function cellValueToText(field: FieldLike, value: unknown): string {
       const n = toNumber(value);
       return n === null ? scalarText(value) : formatNumber(n, precisionOf(config, undefined)).replace(/,/g, "");
     }
+    case "record_id":
+      return scalarText(value);
     case "currency": {
       const n = toNumber(value);
       if (n === null) return scalarText(value);

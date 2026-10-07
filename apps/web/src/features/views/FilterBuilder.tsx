@@ -16,6 +16,20 @@ import styles from "./views.module.css";
 
 const MAX_DEPTH = 3;
 
+/** Always-available Airtable-style Record ID criterion (`rec_…`). */
+const RECORD_ID_FIELD: FieldDto = {
+  id: "__record_id__",
+  name: "Record ID",
+  type: "record_id",
+  config: {},
+  slot: -1,
+};
+
+function fieldsWithRecordId(fields: FieldDto[]): FieldDto[] {
+  if (fields.some((f) => f.type === "record_id" || f.id === RECORD_ID_FIELD.id)) return fields;
+  return [RECORD_ID_FIELD, ...fields];
+}
+
 function toIds(v: unknown): string[] {
   const arr = Array.isArray(v) ? v : v ? [v] : [];
   return arr.map((x) => (typeof x === "string" ? x : String((x as { id?: string }).id ?? "")));
@@ -182,6 +196,7 @@ export function FilterGroupEditor({
   depth?: number;
   disabled?: boolean;
 }) {
+  const filterFields = fieldsWithRecordId(fields);
   const setChild = (i: number, child: FilterAst | null) => {
     const children = [...group.children];
     if (child === null) children.splice(i, 1);
@@ -189,7 +204,7 @@ export function FilterGroupEditor({
     onChange({ ...group, children });
   };
   const addCondition = () => {
-    const f = fields[0];
+    const f = filterFields[0];
     if (!f) return;
     const op = operatorsForFieldType(f.type)[0] ?? "contains";
     const value = defaultFilterValue(f, op);
@@ -241,7 +256,7 @@ export function FilterGroupEditor({
               {conj}
               <FilterGroupEditor
                 baseId={baseId}
-                fields={fields}
+                fields={filterFields}
                 group={child as FilterGroup}
                 depth={depth + 1}
                 disabled={disabled}
@@ -251,7 +266,7 @@ export function FilterGroupEditor({
             </div>
           );
         }
-        const field = fields.find((f) => f.id === child.fieldId);
+        const field = filterFields.find((f) => f.id === child.fieldId);
         const ops = field ? operatorsForFieldType(field.type) : [];
         return (
           <div key={i} className={styles.condRow} data-testid="filter-condition">
@@ -262,14 +277,14 @@ export function FilterGroupEditor({
               aria-label="Field"
               value={child.fieldId}
               onChange={(e) => {
-                const f = fields.find((x) => x.id === e.target.value);
+                const f = filterFields.find((x) => x.id === e.target.value);
                 const nextOps = f ? operatorsForFieldType(f.type) : [];
                 const op = nextOps.includes(child.op as never) ? child.op : (nextOps[0] ?? "contains");
                 const value = defaultFilterValue(f, op);
                 setChild(i, { kind: "condition", fieldId: e.target.value, op, ...(value !== undefined ? { value } : {}) });
               }}
             >
-              {fields.map((f) => (
+              {filterFields.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>

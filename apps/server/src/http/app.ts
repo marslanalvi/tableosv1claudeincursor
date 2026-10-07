@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import { SESSION_COOKIE_NAME } from "@tabula/auth";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyBaseLogger } from "fastify";
 import type { AppContext } from "../lib/app-context.js";
@@ -64,6 +65,7 @@ export async function buildFastify(ctx: AppContext) {
     loggerInstance: ctx.log as unknown as FastifyBaseLogger,
     genReqId: () => crypto.randomUUID(),
     requestIdHeader: "x-request-id",
+    bodyLimit: 50 * 1024 * 1024,
   });
 
   setAuditLogger(ctx.log);
@@ -85,6 +87,33 @@ export async function buildFastify(ctx: AppContext) {
 
   await app.register(cookie, {
     secret: ctx.env.SESSION_SECRET,
+  });
+
+  // CSRF defence for cookie-authenticated mutations: browsers always send
+  // Origin (or Sec-Fetch-Site) on cross-site unsafe requests.
+  const csrfOrigins = new Set(allowedOrigins);
+  try {
+    csrfOrigins.add(new URL(ctx.env.API_URL).origin);
+  } catch {
+    /* ignore malformed */
+  }
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+    if (!request.headers.cookie?.includes(`${SESSION_COOKIE_NAME}=`)) return;
+    const path = request.url.split("?")[0] ?? request.url;
+    if (path.startsWith("/v1/public/") || path.startsWith("/v1/hooks/")) return;
+    const origin = request.headers.origin;
+    const crossSite = origin
+      ? !csrfOrigins.has(origin.replace(/\/$/, ""))
+      : request.headers["sec-fetch-site"] === "cross-site";
+    if (crossSite) {
+      sendProblem(
+        reply,
+        request,
+        createTabulaError(TabulaErrorCodes.FORBIDDEN, { detail: "Cross-site request blocked" }),
+      );
+      return reply;
+    }
   });
 
   registerKernelRequestContext(app);

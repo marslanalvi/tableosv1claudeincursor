@@ -14,7 +14,7 @@ const { app, ctx } = await createApp();
 
 try {
   await app.listen({ port: ctx.env.PORT, host: "0.0.0.0" });
-  ctx.log.info({ port: ctx.env.PORT }, "Tabula API listening");
+  ctx.log.info({ port: ctx.env.PORT }, "TableOS API listening");
 } catch (err) {
   ctx.log.error({ err }, "Failed to start API");
   process.exit(1);

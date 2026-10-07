@@ -209,7 +209,7 @@ function SharePanel({
               {target.targetType === "form" ? "Shareable form link" : "Shareable read-only link"}
             </div>
             <p className={s.hint}>
-              Create a link that works for people without a Tabula account. You can add a password,
+              Create a link that works for people without a TableOS account. You can add a password,
               set an expiration date, or disable the link at any time.
             </p>
           </div>

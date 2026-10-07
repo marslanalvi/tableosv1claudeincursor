@@ -12,7 +12,7 @@ export function buildOpenApiDocument(apiUrl: string): OpenApiDocument {
   return {
     openapi: "3.0.3",
     info: {
-      title: "Tabula API",
+      title: "TableOS API",
       version: "0.1.0-mvp",
     },
     paths: {

@@ -640,6 +640,10 @@ export const fieldDefinitions: FieldTypeDefinition[] = [
       const s = asString(raw, 2048, "URL", ctx?.typecast).trim();
       if (!s) return absent();
       if (/\s/.test(s)) fieldValidationError("URL cannot contain spaces");
+      // Cells render as clickable links; script-capable schemes are an XSS vector.
+      if (/^(javascript|vbscript|data):/i.test(s.replace(/[\u0000-\u001f]/g, ""))) {
+        fieldValidationError("URL scheme is not allowed");
+      }
       return { value: s };
     },
   }),
@@ -852,6 +856,13 @@ export const fieldDefinitions: FieldTypeDefinition[] = [
     label: "Autonumber",
     readOnly: true,
     normalize: readOnlyNormalize("Autonumber"),
+  }),
+  def({
+    key: "record_id",
+    label: "Record ID",
+    readOnly: true,
+    isComputed: true,
+    normalize: readOnlyNormalize("Record ID"),
   }),
   def({
     key: "created_time",

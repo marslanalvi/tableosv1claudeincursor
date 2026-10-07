@@ -1,4 +1,4 @@
-# Tabula
+# TableOS
 
 Airtable-class collaborative database platform. Normative architecture lives in [`architecture/`](architecture/README.md).
 

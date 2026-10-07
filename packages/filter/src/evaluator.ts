@@ -18,6 +18,8 @@ export interface EvalField extends FieldLike {
 }
 
 export interface EvalRecord {
+  /** Public `rec_…` id when present (used by the Record ID field / criterion). */
+  id?: string;
   fields: Record<string, unknown>;
 }
 
@@ -276,7 +278,11 @@ function evalNode(
     }
     const pr = prepareCondition(node, f, ctx);
     if (!pr) return null;
-    return evalPrepared(f, pr, record.fields[f.id]);
+    const raw =
+      normalizeFieldType(f.type) === "record_id"
+        ? (record.fields[f.id] ?? record.id)
+        : record.fields[f.id];
+    return evalPrepared(f, pr, raw);
   }
   const results = node.children
     .map((c) => evalNode(c, record, fields, ctx))

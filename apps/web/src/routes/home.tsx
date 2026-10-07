@@ -522,7 +522,7 @@ export function HomePage() {
   });
 
   useEffect(() => {
-    document.title = "Home · Tabula";
+    document.title = "Home · TableOS";
   }, []);
 
   return (
@@ -532,7 +532,7 @@ export function HomePage() {
           <span className={styles.logo} aria-hidden>
             T
           </span>
-          Tabula
+          TableOS
         </Link>
         <button
           type="button"

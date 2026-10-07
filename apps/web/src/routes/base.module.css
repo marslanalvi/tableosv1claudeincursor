@@ -152,13 +152,16 @@
   align-items: flex-end;
   gap: 8px;
   padding: 0 12px;
-  min-height: 40px;
+  height: 40px;
+  min-width: 0;
+  overflow: hidden;
   border-bottom: 1px solid var(--tabula-color-border);
   background: var(--tabula-color-bg-subtle);
 }
 
-.tableBarSpacer {
-  flex: 1;
+.tableBar > :last-child {
+  flex: none;
+  align-self: center;
 }
 
 .workspace {

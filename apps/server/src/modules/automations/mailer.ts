@@ -8,7 +8,7 @@ import { sql } from "kysely";
  * Outbound email. Every message is stored in `core.email_outbox` (the dev
  * "mailbox"). When `SMTP_URL` is set (smtp://user:pass@host:587 or
  * smtps://user:pass@host:465) the message is also delivered over SMTP.
- * `SMTP_FROM` sets the sender (default "Tabula <no-reply@tabula.local>").
+ * `SMTP_FROM` sets the sender (default "TableOS <no-reply@tableos.local>").
  */
 export interface OutgoingEmail {
   to: string[];
@@ -55,7 +55,7 @@ export async function sendEmail(db: TabulaDb, msg: OutgoingEmail): Promise<SendR
   }
   try {
     await smtpSend(smtpUrl, {
-      from: process.env["SMTP_FROM"] ?? "Tabula <no-reply@tabula.local>",
+      from: process.env["SMTP_FROM"] ?? "TableOS <no-reply@tableos.local>",
       to,
       cc,
       subject: msg.subject,

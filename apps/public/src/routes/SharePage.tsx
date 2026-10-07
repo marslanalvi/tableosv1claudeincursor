@@ -12,7 +12,7 @@ function TopBar({ children }: { children?: ReactNode }) {
         <span className={shell.brandMark} aria-hidden>
           T
         </span>
-        Tabula
+        TableOS
       </span>
       {children}
       <span className={shell.spacer} />
@@ -152,7 +152,7 @@ export function SharePage({ token }: { token: string }) {
 
   const data = shareQuery.data;
   useEffect(() => {
-    if (data) document.title = `${data.title} · Tabula`;
+    if (data) document.title = `${data.title} · TableOS`;
   }, [data]);
 
   const err = shareQuery.error;

@@ -90,6 +90,17 @@ async function attachLinkInfo(db: TabulaDb, infos: SqlFieldInfo[]): Promise<void
   }
 }
 
+/** Built-in filter criterion: Record ID (`rec_…`), even when the table has no Record ID column. */
+export const RECORD_ID_FILTER_FIELD_ID = "__record_id__";
+
+const VIRTUAL_RECORD_ID: SqlFieldInfo = {
+  id: RECORD_ID_FILTER_FIELD_ID,
+  slot: -1,
+  type: "record_id",
+  config: {},
+  isComputed: true,
+};
+
 /** Map keyed by uuid and `fld_` id. */
 export function fieldInfoMap(infos: SqlFieldInfo[]): Map<string, SqlFieldInfo> {
   const m = new Map<string, SqlFieldInfo>();
@@ -97,6 +108,8 @@ export function fieldInfoMap(infos: SqlFieldInfo[]): Map<string, SqlFieldInfo> {
     m.set(f.id, f);
     m.set(pid("fld", f.id), f);
   }
+  const existingRecordId = [...m.values()].find((f) => f.type === "record_id");
+  m.set(RECORD_ID_FILTER_FIELD_ID, existingRecordId ?? VIRTUAL_RECORD_ID);
   return m;
 }
 

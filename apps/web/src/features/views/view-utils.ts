@@ -22,6 +22,8 @@ function localOperatorsForFieldType(type: string): FilterOp[] {
     case "number": case "currency": case "percent": case "rating": case "duration":
     case "autonumber": case "count":
       return NUM_OPS;
+    case "record_id":
+      return TEXT_OPS;
     case "checkbox":
       return ["eq"];
     case "date": case "datetime": case "created_time": case "modified_time":

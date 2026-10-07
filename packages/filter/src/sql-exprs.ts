@@ -73,6 +73,8 @@ export function metaColumn(f: SqlFieldInfo, a: string): { expr: string; type: Sq
   switch (normalizeFieldType(f.type)) {
     case "autonumber":
       return { expr: `${a}.row_number`, type: "int8" };
+    case "record_id":
+      return { expr: `data.encode_public_id('rec', ${a}.id)`, type: "text" };
     case "created_time":
       return { expr: `${a}.created_at`, type: "timestamptz" };
     case "modified_time":

@@ -63,6 +63,7 @@ export const FIELD_TYPES: FieldTypeInfo[] = [
   { type: "rollup", label: "Rollup", icon: "∑", description: "Summarize a field across linked records.", group: "computed", readOnly: true },
   { type: "count", label: "Count", icon: "№", description: "Count the linked records.", group: "computed", readOnly: true },
   { type: "autonumber", label: "Autonumber", icon: "①", description: "A unique, automatically incrementing number.", group: "meta", readOnly: true },
+  { type: "record_id", label: "Record ID", icon: "≡", description: "The unique rec_… identifier for this record (like Airtable's Record ID).", group: "meta", readOnly: true },
   { type: "created_time", label: "Created time", icon: "◴", description: "When the record was created.", group: "meta", readOnly: true },
   { type: "modified_time", label: "Last modified time", icon: "◵", description: "When the record was last modified.", group: "meta", readOnly: true },
   { type: "created_by", label: "Created by", icon: "☻", description: "Who created the record.", group: "meta", readOnly: true },

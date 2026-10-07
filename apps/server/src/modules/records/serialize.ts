@@ -242,12 +242,14 @@ export interface PrimaryFieldInfo {
 export function displayText(
   field: PrimaryFieldInfo,
   stored: unknown,
-  row: { row_number?: string | number; created_at?: Date | string; updated_at?: Date | string | null },
+  row: { id?: string; row_number?: string | number; created_at?: Date | string; updated_at?: Date | string | null },
   users?: Map<string, UserWire>,
 ): string {
   switch (field.type) {
     case "autonumber":
       return row.row_number !== undefined ? String(row.row_number) : "";
+    case "record_id":
+      return row.id ? pid("rec", row.id) : "";
     case "created_time":
       return toIso(row.created_at) ?? "";
     case "modified_time":
@@ -473,6 +475,9 @@ export async function serializeRecords(
       switch (f.type) {
         case "autonumber":
           value = Number(row.row_number);
+          break;
+        case "record_id":
+          value = pid("rec", row.id);
           break;
         case "created_time":
           value = toIso(row.created_at);

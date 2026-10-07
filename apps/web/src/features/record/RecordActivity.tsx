@@ -59,7 +59,7 @@ function actorLabel(e: HistoryEntryWire): string {
     case "form":
       return "Form submission";
     case "system":
-      return e.actor?.name ?? "Tabula";
+      return e.actor?.name ?? "TableOS";
     default:
       return e.actor?.name ?? "Someone";
   }

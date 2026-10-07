@@ -2,7 +2,7 @@ import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiProblemError, type ViewDto } from "../lib/api.ts";
-import { shellApi } from "../lib/api-areas/shell.ts";
+import { hiddenTableIdsOf, shellApi } from "../lib/api-areas/shell.ts";
 import {
   BaseSessionProvider,
   useBaseSession,
@@ -21,6 +21,7 @@ import { ViewsSidebar } from "../features/views/ViewsSidebar.tsx";
 import { FormsIndex } from "../features/views/FormsIndex.tsx";
 import { FieldManager } from "../features/schema/FieldManager.tsx";
 import type { ViewKind } from "../features/views/view-types.ts";
+import { setViewsInCaches } from "../features/views/view-utils.ts";
 import { AutomationsPanel } from "../features/automations/AutomationsPanel.tsx";
 import { ConfirmDialog, Dialog, DropdownMenu, PromptDialog, uiStyles } from "../app/ui.tsx";
 import { toast, errorMessage } from "../app/toast.tsx";
@@ -107,10 +108,11 @@ export function BasePage({ baseId }: { baseId: string }) {
     setBaseTab("data");
   }, [tableParam]);
 
+  const hiddenTableIds = hiddenTableIdsOf(baseQuery.data);
   const resolvedTableId =
     activeTableId && tables.some((t) => t.id === activeTableId)
       ? activeTableId
-      : (tables[0]?.id ?? null);
+      : (tables.find((t) => !hiddenTableIds.includes(t.id))?.id ?? tables[0]?.id ?? null);
   const activeTable = tables.find((t) => t.id === resolvedTableId) ?? null;
 
   // "Create base → Import CSV" from the home page lands here with ?import=1.
@@ -125,7 +127,7 @@ export function BasePage({ baseId }: { baseId: string }) {
   }, [pendingImport, resolvedTableId]);
 
   useEffect(() => {
-    if (baseQuery.data?.name) document.title = `${baseQuery.data.name} · Tabula`;
+    if (baseQuery.data?.name) document.title = `${baseQuery.data.name} · TableOS`;
   }, [baseQuery.data?.name]);
 
   const viewsQuery = useQuery({
@@ -167,12 +169,16 @@ export function BasePage({ baseId }: { baseId: string }) {
         visibility: args.visibility,
       });
     },
-    onSuccess: async (res) => {
-      await queryClient.invalidateQueries({
-        queryKey: ["views", baseId, resolvedTableId],
-      });
-      await queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
+    onSuccess: (res) => {
+      if (resolvedTableId) {
+        // Show the new view at once (the sidebar renames it inline), then refetch.
+        setViewsInCaches(queryClient, baseId, resolvedTableId, (list) =>
+          list.some((v) => v.id === res.view.id) ? list : [...list, res.view as (typeof list)[number]],
+        );
+      }
       setActiveViewId(res.view.id);
+      void queryClient.invalidateQueries({ queryKey: ["views", baseId, resolvedTableId] });
+      void queryClient.invalidateQueries({ queryKey: ["bases", baseId] });
     },
   });
 
@@ -374,6 +380,7 @@ export function BasePage({ baseId }: { baseId: string }) {
               <TableTabs
                 baseId={baseId}
                 tables={tables}
+                hiddenTableIds={hiddenTableIds}
                 activeTableId={resolvedTableId}
                 onSelect={(id) => {
                   setActiveTableId(id);
@@ -382,7 +389,6 @@ export function BasePage({ baseId }: { baseId: string }) {
                 onImport={(id) => setImportTableId(id)}
                 onExport={(id) => setExportTableId(id)}
               />
-              <div className={styles.tableBarSpacer} />
               <ToolsMenu
                 disabled={!activeTable}
                 onManageFields={() => setFieldsOpen(true)}

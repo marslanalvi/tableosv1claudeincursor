@@ -1,23 +1,36 @@
 /* Table tabs, tools, trash (workstream F) */
 .tableTabs {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  overflow: hidden;
+  /* room for the active tab's top border; tabs sit on the bar's bottom line */
+  padding-top: 6px;
+  margin-bottom: -1px;
+}
+
+.tabStrip {
+  flex: 0 1 auto;
   display: flex;
   align-items: flex-end;
   gap: 2px;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 .tableTab {
   position: relative;
+  flex: none;
   display: inline-flex;
   align-items: center;
   height: 34px;
+  max-width: 280px;
   padding: 0 4px 0 2px;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  margin-bottom: -1px;
   white-space: nowrap;
 }
 
@@ -26,33 +39,55 @@
   border-color: var(--tabula-color-border);
 }
 
-.tableTab[data-drop-before="true"]::before,
-.tableTab[data-drop-after="true"]::after {
+/* hairline divider between two inactive neighbours (Airtable look) */
+.tableTab:not([data-active="true"]) + .tableTab:not([data-active="true"])::before {
   content: "";
   position: absolute;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  background: var(--tabula-color-accent);
-}
-
-.tableTab[data-drop-before="true"]::before {
   left: -2px;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--tabula-color-border);
 }
 
-.tableTab[data-drop-after="true"]::after {
-  right: -2px;
+.tableTab[data-drop="before"] {
+  box-shadow: inset 2px 0 0 var(--tabula-color-accent);
+}
+
+.tableTab[data-drop="after"] {
+  box-shadow: inset -2px 0 0 var(--tabula-color-accent);
 }
 
 .tableTabLabel {
+  /* text + a hidden bold copy share one grid cell, so the width never
+     changes when the tab becomes active (no shift when switching tables) */
+  display: inline-grid;
+  align-items: center;
+  min-width: 0;
+  max-width: 240px;
   border: none;
   background: transparent;
-  padding: 0 8px;
+  padding: 0 4px 0 10px;
   height: 100%;
+  font: inherit;
   font-size: var(--tabula-font-size-md);
   font-weight: 400;
   color: var(--tabula-color-text-muted);
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.tabText,
+.tabTextBold {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabTextBold {
+  visibility: hidden;
+  font-weight: 500;
 }
 
 .tableTab[data-active="true"] .tableTabLabel {
@@ -65,18 +100,32 @@
 }
 
 .tabCaret {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
   border: none;
   background: transparent;
   width: 22px;
   height: 22px;
+  padding: 0;
   border-radius: var(--tabula-radius-xs);
-  font-size: 11px;
   color: var(--tabula-color-text-muted);
   cursor: pointer;
+  /* slot is always reserved; the caret shows on the active / hovered tab */
+  opacity: 0;
 }
 
-.tabCaret:hover {
+.tableTab[data-active="true"] .tabCaret,
+.tableTab:hover .tabCaret,
+.tabCaret[data-open="true"],
+.tabCaret:focus-visible {
+  opacity: 1;
+}
+
+.tabCaret:hover,
+.tabCaret[data-open="true"] {
   background: var(--tabula-color-bg-strong);
+  color: var(--tabula-color-text);
 }
 
 .tabRename {
@@ -88,6 +137,48 @@
   font-size: var(--tabula-font-size-md);
   outline: none;
   box-shadow: 0 0 0 2px var(--tabula-color-focus-ring);
+}
+
+/* off-screen copy of every tab, used to measure natural widths */
+.tabMeasure {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  visibility: hidden;
+  pointer-events: none;
+  height: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tabSwitcher {
+  flex: none;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--tabula-radius-sm);
+  background: transparent;
+  color: var(--tabula-color-text-muted);
+  cursor: pointer;
+}
+
+.tabSwitcher:hover,
+.tabSwitcher[data-open="true"] {
+  background: var(--tabula-color-bg-strong);
+  color: var(--tabula-color-text);
+}
+
+.tabSwitcher:focus-visible,
+.tabCaret:focus-visible,
+.tableTabLabel:focus-visible {
+  outline: 2px solid var(--tabula-color-info-border);
+  outline-offset: -2px;
 }
 
 .addTable {
@@ -107,6 +198,217 @@
 .addTable:hover {
   background: var(--tabula-color-bg-strong);
   color: var(--tabula-color-text);
+}
+
+/* menus rendered through FloatingPanel */
+.floatMenu {
+  min-width: 220px;
+  overflow-y: auto;
+  background: var(--tabula-color-bg);
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-md);
+  box-shadow: var(--tabula-shadow-md);
+  padding: 6px;
+}
+
+.tablesMenu {
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--tabula-color-bg);
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-md);
+  box-shadow: var(--tabula-shadow-md);
+  overflow: hidden;
+}
+
+.tablesMenuSearch {
+  position: relative;
+  flex: none;
+  padding: 10px 10px 6px;
+}
+
+.tablesMenuSearchIcon {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  margin-top: 2px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--tabula-color-text-subtle);
+  pointer-events: none;
+}
+
+.tablesMenuInput {
+  width: 100%;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 10px 0 34px;
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-sm);
+  font: inherit;
+  font-size: var(--tabula-font-size-md);
+  color: var(--tabula-color-text);
+  background: var(--tabula-color-bg);
+  outline: none;
+}
+
+.tablesMenuInput:focus {
+  border-color: var(--tabula-color-info-border);
+  box-shadow: 0 0 0 1px var(--tabula-color-info-border);
+}
+
+.tablesMenuList {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.tablesMenuRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 4px 0 6px;
+  border-radius: var(--tabula-radius-sm);
+  color: var(--tabula-color-text);
+  font-size: var(--tabula-font-size-md);
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tablesMenuRow[data-highlight="true"] {
+  background: var(--tabula-color-bg-subtle);
+}
+
+.tablesMenuRow[data-hidden="true"] {
+  color: var(--tabula-color-text-subtle);
+  font-weight: 400;
+}
+
+.tablesMenuRow[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--tabula-color-accent);
+}
+
+.tablesMenuRow[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--tabula-color-accent);
+}
+
+.tablesMenuOption {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+
+.tablesMenuCheck {
+  flex: none;
+  width: 18px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--tabula-color-text);
+}
+
+.tablesMenuName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tablesMenuIconBtn {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--tabula-radius-xs);
+  background: transparent;
+  color: var(--tabula-color-text-muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.tablesMenuIconBtn[data-persist="true"],
+.tablesMenuRow[data-highlight="true"] .tablesMenuIconBtn,
+.tablesMenuRow:hover .tablesMenuIconBtn {
+  visibility: visible;
+}
+
+.tablesMenuIconBtn:hover:not(:disabled) {
+  background: var(--tabula-color-bg-strong);
+  color: var(--tabula-color-text);
+}
+
+.tablesMenuIconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tablesMenuGrip {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 26px;
+  color: var(--tabula-color-text-subtle);
+  cursor: grab;
+  visibility: hidden;
+}
+
+.tablesMenuRow[data-highlight="true"] .tablesMenuGrip,
+.tablesMenuRow:hover .tablesMenuGrip {
+  visibility: visible;
+}
+
+.tablesMenuEmpty {
+  padding: 10px 8px;
+  color: var(--tabula-color-text-muted);
+  font-size: var(--tabula-font-size-sm);
+}
+
+.tablesMenuFooter {
+  flex: none;
+  border-top: 1px solid var(--tabula-color-border);
+  padding: 6px;
+}
+
+.tablesMenuAdd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--tabula-radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--tabula-font-size-md);
+  color: var(--tabula-color-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tablesMenuAdd[data-highlight="true"],
+.tablesMenuAdd[aria-expanded="true"] {
+  background: var(--tabula-color-bg-subtle);
+  color: var(--tabula-color-text);
+}
+
+.tablesMenuAddChevron {
+  margin-left: auto;
+  display: inline-flex;
 }
 
 .toolsTrigger {

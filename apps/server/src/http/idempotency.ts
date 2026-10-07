@@ -11,6 +11,8 @@ const TTL_HOURS = 24;
 const LOCK_MS = 60_000;
 /** POST endpoints that only read; replaying a cached page would return stale data. */
 const READ_ONLY_POST = /\/records\/(query|group)$/;
+/** Chunked CSV/XLSX import: large bodies + long writes must not be keyed. */
+const SKIP_IDEMPOTENCY = /\/import(\/csv)?$/;
 
 interface IdempotencyState {
   key: string;
@@ -93,7 +95,7 @@ export async function registerIdempotency(
       return;
     }
     const path = request.url.split("?")[0] ?? request.url;
-    if (READ_ONLY_POST.test(path)) {
+    if (READ_ONLY_POST.test(path) || SKIP_IDEMPOTENCY.test(path)) {
       return;
     }
     if (rawKey.length > 255) {

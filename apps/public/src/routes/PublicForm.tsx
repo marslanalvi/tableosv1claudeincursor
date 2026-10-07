@@ -195,7 +195,7 @@ export function PublicForm({ token, share }: { token: string; share: FormShare }
           )}
         </div>
         <p className={styles.footer}>
-          <span className={styles.footerMark}>T</span> Made with Tabula · Never submit passwords through this form.
+          <span className={styles.footerMark}>T</span> Made with TableOS · Never submit passwords through this form.
         </p>
       </div>
     </div>

@@ -26,6 +26,7 @@ export type FieldTypeKey =
   | "rollup"
   | "count"
   | "autonumber"
+  | "record_id"
   | "created_time"
   | "modified_time"
   | "created_by"

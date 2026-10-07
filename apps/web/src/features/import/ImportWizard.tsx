@@ -10,7 +10,7 @@ type Step = "source" | "map" | "run" | "done";
 
 const NEW_FIELD = "__new__";
 const SKIP = "__skip__";
-const CHUNK = 1000;
+const CHUNK = 200;
 
 const TYPE_LABELS: Record<string, string> = {
   text: "Single line text",
@@ -42,7 +42,11 @@ interface ColumnMap {
 
 function errorText(err: unknown): string {
   if (err instanceof ApiProblemError) return err.problem.detail ?? err.problem.title;
-  return err instanceof Error ? err.message : "Something went wrong";
+  const msg = err instanceof Error ? err.message : "";
+  if (!msg || /failed to fetch|networkerror|load failed/i.test(msg)) {
+    return "Could not reach the TableOS API. Check that the server is running and try again.";
+  }
+  return msg;
 }
 
 /**

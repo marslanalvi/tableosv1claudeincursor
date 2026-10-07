@@ -34,7 +34,7 @@ function Landing() {
     <div className={shell.shell}>
       <div className={shell.landing}>
         <div>
-          <h1>Tabula shared links</h1>
+          <h1>TableOS shared links</h1>
           <p>Open a shared view or form link to see its content here.</p>
         </div>
       </div>
