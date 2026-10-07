@@ -163,6 +163,15 @@ export async function loadComputeSchema(trx: Db, baseId: string): Promise<BaseSc
       dependsOnFieldId: e.depends_on_field_id,
       viaLinkFieldId: e.via_link_field_id,
     }));
+  // A link field displays its peers' primary values, so lookups/rollups that
+  // target a link field must refresh when a linked record's primary changes.
+  for (const f of fieldsById.values()) {
+    if (f.type !== "link" && f.type !== "contact") continue;
+    const prim = primaryByTable.get(String(f.config["linkedTableId"] ?? ""));
+    if (prim && fieldsById.has(prim) && prim !== f.id) {
+      edges.push({ dependentFieldId: f.id, dependsOnFieldId: prim, viaLinkFieldId: f.id });
+    }
+  }
   const incoming = new Map<string, FieldDependencyEdge[]>();
   for (const e of edges) {
     const list = incoming.get(e.dependentFieldId) ?? [];
@@ -348,7 +357,9 @@ class ComputeRun {
     if (!row || !prim) return "";
     if (prim.isComputed) {
       const v = this.computedOf(row, prim).value;
-      return Array.isArray(v) ? v.map((x) => plainText(x)).join(", ") : plainText(v);
+      if (v === undefined || v === null) return "";
+      const vals = prim.type === "lookup" ? await this.toRuntime(prim, Array.isArray(v) ? v : [v]) : v;
+      return Array.isArray(vals) ? vals.map((x) => plainText(x)).filter((x) => x !== "").join(", ") : plainText(vals);
     }
     switch (prim.type) {
       case "autonumber":
@@ -365,19 +376,16 @@ class ComputeRun {
     }
   }
 
-  /** Stored-form values used by lookups (flattened). */
+  /**
+   * Stored-form values used by lookups (flattened): raw rec uuids for a link
+   * target, `opt_` ids for selects, user uuids for collaborators, etc.
+   */
   async lookupValues(target: FieldInfo, peerIds: string[]): Promise<unknown[]> {
     await this.ensureRows(target.tableId, peerIds);
     const out: unknown[] = [];
     if (target.type === "link" || target.type === "contact") {
       const peerMap = await this.peers(target.id, peerIds);
-      const peerTable = String(target.config["linkedTableId"] ?? "");
-      for (const p of peerIds) {
-        for (const q of peerMap.get(p) ?? []) {
-          const t = await this.primaryText(peerTable, q);
-          if (t !== "") out.push(t);
-        }
-      }
+      for (const p of peerIds) for (const q of peerMap.get(p) ?? []) out.push(q);
       return out;
     }
     for (const p of peerIds) {
@@ -442,6 +450,13 @@ class ComputeRun {
       case "lookup": {
         const target = this.schema.fieldsById.get(String(f.config["targetFieldId"] ?? f.config["lookupFieldId"] ?? ""));
         return target ? this.toRuntime(target, values) : (values as RuntimeValue[]);
+      }
+      case "link":
+      case "contact": {
+        const peerTable = String(f.config["linkedTableId"] ?? "");
+        const out: RuntimeValue[] = [];
+        for (const v of values) out.push(typeof v === "string" ? await this.primaryText(peerTable, v) : null);
+        return out;
       }
       default:
         return values.map((v) => (v === undefined ? null : (v as RuntimeValue)));
@@ -564,10 +579,7 @@ class ComputeRun {
           if (!this.schema.fieldsById.has(linkId)) return { value: undefined, error: "#ERROR! Link field was deleted" };
           const peers = (await this.peers(linkId, [row.id])).get(row.id) ?? [];
           const stored = await this.lookupValues(target, peers);
-          const values =
-            target.type === "link" || target.type === "contact"
-              ? (stored as RuntimeValue[])
-              : await this.toRuntime(target, stored);
+          const values = await this.toRuntime(target, stored);
           return { value: aggregate(String(f.config["aggregation"] ?? f.config["function"] ?? "sum"), values, peers.length, f.config["precision"]) };
         }
         default:
@@ -768,8 +780,10 @@ export async function runComputeInTx(
 
   for (const fieldId of order) {
     const f = schema.fieldsById.get(fieldId);
-    if (!f || !f.isComputed || f.type === "ai_generated") continue;
-    const targets = new Set<string>(forced.get(fieldId) ?? []);
+    if (!f) continue;
+    const isLink = f.type === "link" || f.type === "contact";
+    if (!isLink && (!f.isComputed || f.type === "ai_generated")) continue;
+    const targets = new Set<string>(isLink ? [] : (forced.get(fieldId) ?? []));
     for (const e of schema.incoming.get(fieldId) ?? []) {
       const recs = changedRecs.get(e.dependsOnFieldId);
       if (!recs || recs.size === 0) continue;
@@ -782,6 +796,12 @@ export async function runComputeInTx(
       }
     }
     if (targets.size === 0) continue;
+    if (isLink) {
+      // Displayed names changed; nothing is stored, but dependents must refresh.
+      addAll(changedRecs, fieldId, targets);
+      addAll(run.touched, f.tableId, targets);
+      continue;
+    }
 
     if (targets.size > syncLimit && !forced.has(fieldId)) {
       for (const r of targets) staleRows.push({ tableId: f.tableId, recordId: r, fieldId });
