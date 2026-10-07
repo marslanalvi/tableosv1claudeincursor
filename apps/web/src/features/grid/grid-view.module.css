@@ -1,0 +1,731 @@
+/* Grid styled per DESIGN-airtable.md: white canvas, ink type, hairline dividers,
+   near-black primary actions, info-blue focus/selection. */
+.root {
+  --ink: #181d26;
+  --body: #333840;
+  --muted: #41454d;
+  --hairline: #dddddd;
+  --border-strong: #9297a0;
+  --canvas: #ffffff;
+  --soft: #f8fafc;
+  --strong: #e0e2e6;
+  --link: #1b61c9;
+  --focus: #458fff;
+  --focus-bg: rgba(69, 143, 255, 0.1);
+  --danger: #aa2d00;
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--canvas);
+  color: var(--body);
+  font-family: Haas, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.scroller {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  overscroll-behavior: contain;
+}
+
+.canvas {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* ---------- header ---------- */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  height: 32px;
+  background: var(--soft);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.hcell {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--hairline);
+  background: var(--soft);
+  color: var(--ink);
+  font-weight: 500;
+  user-select: none;
+  cursor: default;
+}
+
+.hcell:hover {
+  background: #f0f2f5;
+}
+
+.hcellSelected {
+  background: #e8f0ff !important;
+}
+
+.hcellDragging {
+  opacity: 0.45;
+}
+
+.hIcon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hCaret {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font: inherit;
+  opacity: 0;
+}
+
+.hcell:hover .hCaret,
+.hCaretOpen {
+  opacity: 1;
+}
+
+.hCaret:active {
+  background: var(--strong);
+}
+
+.resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 3;
+}
+
+.resizer:hover,
+.resizerActive {
+  background: linear-gradient(to right, transparent 3px, var(--focus) 3px, var(--focus) 5px, transparent 5px);
+}
+
+.dropLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--focus);
+  z-index: 8;
+  pointer-events: none;
+}
+
+.rowDropLine {
+  position: absolute;
+  left: 0;
+  height: 2px;
+  background: var(--focus);
+  z-index: 8;
+  pointer-events: none;
+}
+
+.addColBtn {
+  flex: none;
+  width: 92px;
+  height: 32px;
+  border: none;
+  border-right: 1px solid var(--hairline);
+  background: var(--soft);
+  color: var(--muted);
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.addColBtn:active {
+  background: var(--strong);
+}
+
+/* ---------- body ---------- */
+.body {
+  position: relative;
+  flex: 1 0 auto;
+}
+
+.row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  box-sizing: border-box;
+  background: var(--canvas);
+}
+
+.row:hover .cell,
+.row:hover .rownum {
+  background: #fafbfc;
+}
+
+.rowSelected .cell,
+.rowSelected .rownum,
+.rowSelected:hover .cell,
+.rowSelected:hover .rownum {
+  background: #f2f7ff;
+}
+
+.rowEditing {
+  z-index: 3;
+}
+
+.cell {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  height: 100%;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+  color: var(--body);
+  user-select: none;
+  cursor: default;
+}
+
+.cellInner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.cellWrap .cellInner {
+  align-items: flex-start;
+  padding-top: 7px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 18px;
+}
+
+.cellPrimary {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.frozen {
+  position: sticky;
+  z-index: 2;
+}
+
+.frozenEdge {
+  box-shadow: 2px 0 0 0 rgba(24, 29, 38, 0.06);
+  border-right-color: #c8cbd0;
+}
+
+.inRange {
+  background: var(--focus-bg) !important;
+}
+
+.active {
+  z-index: 3;
+}
+
+.active::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 2px solid var(--focus);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.editingCell {
+  z-index: 5;
+  overflow: visible;
+}
+
+.editingCell .cellInner {
+  padding: 0;
+  overflow: visible;
+}
+
+.fillPreview {
+  background: rgba(69, 143, 255, 0.06) !important;
+  outline: 1px dashed var(--focus);
+  outline-offset: -1px;
+}
+
+.fillHandle {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 7px;
+  height: 7px;
+  background: var(--focus);
+  border: 1px solid #fff;
+  cursor: ns-resize;
+  z-index: 6;
+}
+
+/* ---------- row number column ---------- */
+.rownum {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 4px 0 8px;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.hrownum {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  justify-content: center;
+}
+
+.colorBar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+}
+
+.rowNumText {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.rowCheck {
+  display: none;
+  width: 14px;
+  height: 14px;
+  margin: 0 auto;
+  accent-color: var(--ink);
+  cursor: pointer;
+}
+
+.row:hover .rowNumText,
+.rowSelected .rowNumText {
+  display: none;
+}
+
+.row:hover .rowCheck,
+.rowSelected .rowCheck {
+  display: block;
+}
+
+.grip,
+.expandBtn {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--border-strong);
+  padding: 0 2px;
+  font: inherit;
+  line-height: 1;
+  visibility: hidden;
+}
+
+.grip {
+  cursor: grab;
+  font-size: 12px;
+}
+
+.expandBtn {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--link);
+  border-radius: 6px;
+}
+
+.row:hover .grip,
+.row:hover .expandBtn {
+  visibility: visible;
+}
+
+.gripDisabled {
+  cursor: default;
+  opacity: 0.25;
+}
+
+/* ---------- groups ---------- */
+.groupRow {
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: flex-end;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--soft);
+}
+
+.groupLabel {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 12px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  border: none;
+  background: transparent;
+  font: inherit;
+}
+
+.groupField {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16px;
+}
+
+.groupValue {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.groupCount {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---------- add row ---------- */
+.addRow {
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 32px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+
+.addRowBtn {
+  position: sticky;
+  left: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 0 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.addRowBtn:active {
+  color: var(--ink);
+  background: var(--strong);
+}
+
+/* ---------- summary bar ---------- */
+.summary {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  height: 34px;
+  border-top: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+
+.scell {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  border-right: 1px solid transparent;
+  background: var(--canvas);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.scell:hover {
+  background: var(--soft);
+}
+
+.scellHint {
+  visibility: hidden;
+}
+
+.scell:hover .scellHint {
+  visibility: visible;
+}
+
+.scellValue {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.stotal {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  justify-content: flex-start;
+  cursor: default;
+  color: var(--muted);
+}
+
+/* ---------- bulk bar / status ---------- */
+.bulkBar {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(24, 29, 38, 0.18);
+}
+
+.bulkBtn {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.bulkBtn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.loadingMore {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* ---------- menus & dialogs ---------- */
+.menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--canvas, #fff);
+  border: 1px solid #dddddd;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(24, 29, 38, 0.12);
+  color: #181d26;
+  font-family: Haas, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  outline: none;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #333840;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover:not(:disabled),
+.menuItemActive {
+  background: #f8fafc;
+  color: #181d26;
+}
+
+.menuItem:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.menuDanger {
+  color: #aa2d00;
+}
+
+.menuIcon {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  color: #41454d;
+}
+
+.menuDanger .menuIcon {
+  color: inherit;
+}
+
+.menuLabel {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.menuHint {
+  color: #9297a0;
+  font-size: 12px;
+}
+
+.menuDivider {
+  height: 1px;
+  margin: 4px 2px;
+  background: #dddddd;
+}
+
+.dialogBack {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+  background: rgba(24, 29, 38, 0.4);
+}
+
+.dialog {
+  width: min(420px, 92vw);
+  padding: 24px;
+  border-radius: 12px;
+  background: #fff;
+  color: #333840;
+  font-family: Haas, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  box-shadow: 0 8px 32px rgba(24, 29, 38, 0.18);
+}
+
+.dialogTitle {
+  margin: 0 0 8px;
+  color: #181d26;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.dialogBody {
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btnPrimary,
+.btnSecondary,
+.btnDanger {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btnPrimary {
+  border: 1px solid #181d26;
+  background: #181d26;
+  color: #fff;
+}
+
+.btnPrimary:active {
+  background: #0d1218;
+}
+
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btnSecondary {
+  border: 1px solid #dddddd;
+  background: #fff;
+  color: #181d26;
+}
+
+.btnSecondary:active {
+  background: #e0e2e6;
+}
+
+.btnDanger {
+  border: 1px solid #aa2d00;
+  background: #aa2d00;
+  color: #fff;
+}

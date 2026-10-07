@@ -35,7 +35,7 @@ export function randomOptionId(): string {
 }
 
 /** Sensible default config when a field of `type` is created. */
-export function defaultFieldConfig(type: string, ctx: { tables?: TableLike[]; tableId?: string } = {}): Config {
+export function defaultFieldConfig(type: string, ctx: { tables?: TableLike[] | undefined; tableId?: string | undefined } = {}): Config {
   switch (type) {
     case "single_select":
     case "multi_select":

@@ -1,9 +1,6 @@
 @import "@tabula/ui/tokens.css";
 
-:root {
-  --tabula-font-sans: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
-  --tabula-font-display: "Fraunces", Georgia, serif;
-}
+/* Fonts come from @tabula/ui tokens (Inter as the Haas substitute). */
 
 *,
 *::before,
@@ -21,8 +18,9 @@ body,
 body {
   font-family: var(--tabula-font-sans);
   font-size: var(--tabula-font-size-md);
+  line-height: 1.35;
   color: var(--tabula-color-text);
-  background: var(--tabula-color-bg-subtle);
+  background: var(--tabula-color-bg);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -32,16 +30,16 @@ a {
   font-weight: 500;
 }
 
-a:hover {
+a:active {
   color: var(--tabula-color-accent-hover);
-  text-decoration: underline;
 }
 
 h1,
 h2,
 h3 {
   font-family: var(--tabula-font-display);
-  font-weight: 600;
+  font-weight: 500;
+  color: var(--tabula-color-text);
   margin: 0;
 }
 
@@ -51,4 +49,9 @@ select,
 textarea {
   font-family: inherit;
   font-size: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--tabula-color-info-border);
+  outline-offset: 1px;
 }

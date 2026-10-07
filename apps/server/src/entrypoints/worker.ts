@@ -17,6 +17,7 @@ import {
   handleSearchIndexEvent,
 } from "../modules/collab/worker-handlers.js";
 import { connectRedis } from "../lib/redis.js";
+import { startAutomationEngine } from "../modules/automations/consumer.js";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -59,6 +60,9 @@ async function main(): Promise<void> {
 
   log.info("Subscribed to domain events (notifications, search indexer)");
 
+  // Workstream G: automation engine (outbox consumer + scheduler + run executor).
+  const automationEngine = startAutomationEngine({ db, env, log });
+
   const handles = queues.map((queue) => {
     const worker = createWorker(
       queue,
@@ -96,6 +100,7 @@ async function main(): Promise<void> {
   log.info({ queues }, "BullMQ workers started");
 
   const shutdown = async (): Promise<void> => {
+    automationEngine.stop();
     await eventBus.close();
     await Promise.all(handles.map((h) => h.worker.close()));
     redis.disconnect();

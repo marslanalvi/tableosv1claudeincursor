@@ -37,14 +37,61 @@ async function parseProblem(response: Response): Promise<TabulaError> {
   return problem;
 }
 
+let unauthorizedHandler: ((path: string) => void) | null = null;
+
+/** Called on any 401 outside /v1/auth/* (F: app shell redirects to /login). */
+export function setUnauthorizedHandler(fn: ((path: string) => void) | null): void {
+  unauthorizedHandler = fn;
+}
+
+const recentClientOps: string[] = [];
+const recentClientOpSet = new Set<string>();
+
+/** Remember a client op id so realtime echoes of our own edits can be skipped. */
+export function rememberClientOp(id: string): void {
+  recentClientOps.push(id);
+  recentClientOpSet.add(id);
+  while (recentClientOps.length > 500) {
+    const old = recentClientOps.shift();
+    if (old) recentClientOpSet.delete(old);
+  }
+}
+
+/** True when a realtime change frame was caused by this tab. */
+export function isOwnClientOp(id: string | null | undefined): boolean {
+  return Boolean(id) && recentClientOpSet.has(id as string);
+}
+
+export function newClientOpId(): string {
+  const rnd =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `cop_${rnd}`;
+}
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 /** Shared fetch wrapper. Area modules in `lib/api/*.ts` reuse this. */
 export async function request<T>(
   path: string,
   init?: RequestInit & { json?: unknown; clientOpId?: string },
 ): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (init?.clientOpId) {
-    headers.set("X-Tabula-Client-Op-Id", init.clientOpId);
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Every mutation carries a client op id (echoed back on realtime change
+  // frames as `clientMutationId`) and, for data-plane routes, the same value
+  // as Idempotency-Key so a retried request is not applied twice.
+  if (MUTATING_METHODS.has(method) && !path.startsWith("/v1/auth/")) {
+    const opId = init?.clientOpId ?? headers.get("X-Tabula-Client-Op-Id") ?? newClientOpId();
+    headers.set("X-Tabula-Client-Op-Id", opId);
+    if (
+      !headers.has("Idempotency-Key") &&
+      (path.startsWith("/v1/bases/") || path.startsWith("/v1/workspaces/"))
+    ) {
+      headers.set("Idempotency-Key", opId);
+    }
+    rememberClientOp(opId);
   }
   let body = init?.body;
   if (init?.json !== undefined) {
@@ -52,14 +99,15 @@ export async function request<T>(
     body = JSON.stringify(init.json);
   }
 
-  const fetchInit: RequestInit = { headers, credentials: "include" };
-  if (init?.method) fetchInit.method = init.method;
+  const fetchInit: RequestInit = { headers, credentials: "include", method };
   if (body !== undefined) fetchInit.body = body;
   if (init?.signal) fetchInit.signal = init.signal;
-  void init?.clientOpId;
   const response = await fetch(`${API_BASE}${path}`, fetchInit);
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/v1/auth/")) {
+      unauthorizedHandler?.(path);
+    }
     throw new ApiProblemError(await parseProblem(response));
   }
 

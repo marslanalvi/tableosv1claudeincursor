@@ -13,6 +13,7 @@
 import { sql, type Kysely } from "kysely";
 import type { Database } from "@tabula/db";
 import type { TabulaStorage } from "@tabula/storage";
+import { parseIsoInstant } from "@tabula/filter";
 import { parsePid, pid } from "../../lib/public-ids.js";
 
 type Db = Kysely<Database>;
@@ -177,7 +178,7 @@ function normalizeOptionId(v: unknown, opts: SelectOption[]): string | null {
   if (typeof v !== "string" || v === "") return null;
   if (opts.length === 0) return v;
   if (opts.some((o) => o.id === v)) return v;
-  const byLabel = opts.find((o) => o.label === v) ?? opts.find((o) => o.label.toLowerCase() === v.toLowerCase());
+  const byLabel = opts.find((o) => o.label === v);
   return byLabel ? byLabel.id : v;
 }
 
@@ -581,14 +582,11 @@ function normalizeStored(f: SerializeFieldRow, v: unknown): unknown {
       return v === true || v === "true" || v === 1 ? true : undefined;
     case "date": {
       if (typeof v !== "string") return undefined;
-      if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
-      const d = new Date(v);
-      return Number.isNaN(d.getTime()) ? v : d.toISOString().slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : undefined;
     }
     case "datetime": {
-      if (typeof v !== "string") return undefined;
-      const d = new Date(v);
-      return Number.isNaN(d.getTime()) ? v : d.toISOString();
+      const d = parseIsoInstant(v);
+      return d ? d.toISOString() : undefined;
     }
     case "single_select": {
       const opts = selectOptions(f.config);
@@ -647,6 +645,8 @@ export async function loadUsers(db: Db, ids: string[]): Promise<Map<string, User
   return out;
 }
 
+let signerDownUntil = 0;
+
 async function loadAttachments(
   db: Db,
   ids: string[],
@@ -663,10 +663,15 @@ async function loadAttachments(
     r.rows.map(async (a) => {
       const apiPath = `/v1/bases/${pid("bas", a.base_id)}/attachments/${pid("att", a.id)}`;
       let url = apiPath;
-      if (storage && a.scan_status !== "rejected") {
+      if (storage && a.scan_status !== "rejected" && Date.now() > signerDownUntil) {
         try {
-          url = (await storage.presignDownload(a.object_key)).url;
+          url = await Promise.race([
+            storage.presignDownload(a.object_key).then((d) => d.url),
+            new Promise<string>((_, rej) => setTimeout(() => rej(new Error("presign timeout")), 1500)),
+          ]);
         } catch {
+          // Signer unavailable: fall back to the API path and back off for a minute.
+          signerDownUntil = Date.now() + 60_000;
           url = apiPath;
         }
       }
@@ -719,4 +724,40 @@ export async function serializeRecordsByIds(
 ): Promise<RecordWire[]> {
   const rows = await loadRecordRows(db, tableId, recordIds);
   return serializeRecords(db, tableId, rows, opts);
+}
+
+/** Primary-field display names of records in `tableId` (uuid → name). */
+export async function loadRecordNames(
+  db: Db,
+  tableId: string,
+  recordIds: readonly string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(recordIds)].filter((x) => UUID_RE.test(x));
+  if (ids.length === 0) return out;
+  const pf = await sql<{ slot: number; type: string; config: Record<string, unknown>; is_computed: boolean }>`
+    SELECT f.slot, f.type, f.config, f.is_computed
+    FROM data.tables t JOIN data.fields f ON f.id = t.primary_field_id
+    WHERE t.id = ${tableId}
+  `.execute(db);
+  const prim = pf.rows[0];
+  const rows = await sql<{ id: string; cells: Record<string, unknown>; computed: Record<string, unknown>; row_number: string; created_at: Date; updated_at: Date }>`
+    SELECT id, cells, computed, row_number, created_at, updated_at
+    FROM data.records WHERE table_id = ${tableId} AND id = ANY(${ids}::uuid[]) AND deleted_at IS NULL
+  `.execute(db);
+  let users: Map<string, UserWire> | undefined;
+  if (prim?.type === "collaborator") {
+    const uids = rows.rows.flatMap((r) => asArray(r.cells[String(prim.slot)]).map((x) => idFromStored(x, "usr")).filter((x): x is string => !!x));
+    users = await loadUsers(db, uids);
+  }
+  for (const r of rows.rows) {
+    if (!prim) {
+      out.set(r.id, "");
+      continue;
+    }
+    const info: PrimaryFieldInfo = { slot: prim.slot, type: prim.type, config: prim.config ?? {}, is_computed: prim.is_computed };
+    const stored = prim.is_computed ? r.computed[String(prim.slot)] : r.cells[String(prim.slot)];
+    out.set(r.id, displayText(info, stored, r, users));
+  }
+  return out;
 }

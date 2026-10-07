@@ -1,249 +1,388 @@
 import { generateUuidV7 } from "@tabula/types";
-import { QueueNames, createQueue } from "@tabula/jobs";
 import { sql } from "kysely";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../../lib/app-context.js";
 import { parsePid, pid } from "../../lib/public-ids.js";
-import { handleRouteError, notFound } from "../../http/errors.js";
+import { notFound, validationProblem } from "../../http/errors.js";
 import { resolveBaseContext, resolveTableContext } from "../access/helpers.js";
-import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
-import { loadTableFields, mapInputFieldsToCells } from "../schema/field-map.js";
-import { insertOneRecordFromImport } from "./import-records.js";
+import { assertCan } from "../access/assert.js";
+import { compileForUser } from "../access/compile.js";
+import { LimitsService } from "../billing/limits-service.js";
+import { executeRecordQuery } from "../query/execute-record-query.js";
+import { loadView } from "../share/service.js";
+import { handleWave4Error } from "../wave4/problems.js";
+import { exportValue, toCsv, type ExportField } from "./format.js";
+import { buildXlsx } from "./xlsx.js";
+
+const MAX_ROWS_PER_REQUEST = 2000;
+const BATCH = 500;
+const MAX_EXPORT_ROWS = 100_000;
 
 const importBody = z.object({
   tableId: z.string(),
-  filename: z.string().optional(),
-  rows: z.array(z.record(z.unknown())).min(1).max(5000),
+  filename: z.string().max(255).optional(),
+  /** Rows keyed by `fld_` id (or field name). */
+  rows: z.array(z.record(z.unknown())).min(1).max(MAX_ROWS_PER_REQUEST),
+  typecast: z.boolean().optional().default(true),
+  /** Continue an existing import job (chunked uploads from the wizard). */
+  importJobId: z.string().optional(),
+  /** Index of rows[0] in the source file (for error row numbers). */
+  rowOffset: z.number().int().nonnegative().optional().default(0),
+  /** Total rows in the source file (first chunk only). */
+  totalRows: z.number().int().positive().optional(),
+  final: z.boolean().optional().default(true),
 });
 
-const exportBody = z.object({
-  tableId: z.string(),
-});
-
-function actor(user: NonNullable<import("fastify").FastifyRequest["user"]>): MutationActor {
-  return {
-    actorType: "user",
-    actorId: user.id,
-    sessionId: user.sessionId,
-    via: "api",
-  };
+interface RowError {
+  row: number;
+  message: string;
 }
 
 export async function registerImportExportRoutes(
   app: FastifyInstance,
   ctx: AppContext,
 ): Promise<void> {
-  app.post<{ Params: { baseId: string } }>(
-    "/v1/bases/:baseId/import/csv",
-    async (request, reply) => {
+  const limits = new LimitsService(ctx.db);
+
+  /**
+   * Create records through B's batch write route (validation, typecast,
+   * links, compute, one change per batch) by injecting with the caller's
+   * session. Returns the created count and per-row errors.
+   */
+  async function writeBatch(
+    request: FastifyRequest,
+    baseParam: string,
+    tableParam: string,
+    rows: Record<string, unknown>[],
+    typecast: boolean,
+    rowOffset: number,
+  ): Promise<{ created: number; errors: RowError[] }> {
+    const url = `/v1/bases/${baseParam}/tables/${tableParam}/records/batch`;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (request.headers.cookie) headers["cookie"] = request.headers.cookie;
+    const res = await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: JSON.stringify({ records: rows.map((fields) => ({ fields })), typecast }),
+    });
+    if (res.statusCode < 300) {
+      const body = res.json() as { records?: unknown[] };
+      return { created: body.records?.length ?? rows.length, errors: [] };
+    }
+    if (rows.length === 1) {
+      let message = `Failed (${res.statusCode})`;
       try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-
-        const baseId = parsePid(request.params.baseId, "bas");
-        const base = await resolveBaseContext(ctx.db, user.id, baseId);
-        if (!base.ok) {
-          notFound(request, reply, "Base not found");
-          return;
-        }
-
-        const body = importBody.parse(request.body);
-        const tableId = parsePid(body.tableId, "tbl");
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const longOpId = generateUuidV7();
-        const importJobId = generateUuidV7();
-
-        await ctx.db.transaction().execute(async (trx) => {
-          await sql`
-            INSERT INTO data.long_operations (
-              id, workspace_id, base_id, kind, status, created_by
-            ) VALUES (
-              ${longOpId}, ${base.workspaceId}, ${baseId}, 'import', 'running', ${user.id}
-            )
-          `.execute(trx);
-
-          await sql`
-            INSERT INTO data.import_jobs (
-              id, workspace_id, base_id, table_id, long_operation_id,
-              status, source_filename, rows_total, created_by
-            ) VALUES (
-              ${importJobId}, ${base.workspaceId}, ${baseId}, ${tableId}, ${longOpId},
-              'running', ${body.filename ?? "import.json"}, ${body.rows.length}, ${user.id}
-            )
-          `.execute(trx);
-        });
-
-        const fieldRows = await loadTableFields(ctx.db, tableId);
-        let imported = 0;
-        let failed = 0;
-
-        for (let i = 0; i < body.rows.length; i++) {
-          const row = body.rows[i];
-          if (!row) continue;
-          try {
-            const cells = mapInputFieldsToCells(fieldRows, row);
-            await withBaseTx(
-              ctx.db,
-              {
-                orgId: base.orgId,
-                workspaceId: base.workspaceId,
-                baseId,
-                actor: actor(user),
-                redis: ctx.redis,
-              },
-              async (_mctx, trx) => {
-                const recordId = await insertOneRecordFromImport(trx, {
-                  tableId,
-                  baseId,
-                  workspaceId: base.workspaceId,
-                  userId: user.id,
-                  cells,
-                });
-                return {
-                  kind: "records" as const,
-                  ops: [{ op: "record.created", recordId, cells }],
-                  eventType: "record.created",
-                  aggregateType: "record",
-                  aggregateId: recordId,
-                  payload: { tableId },
-                };
-              },
-            );
-            imported += 1;
-          } catch (err) {
-            failed += 1;
-            await sql`
-              INSERT INTO data.import_errors (
-                id, import_job_id, workspace_id, source_row, message
-              ) VALUES (
-                ${generateUuidV7()}, ${importJobId}, ${base.workspaceId},
-                ${i + 1}, ${err instanceof Error ? err.message : "Import failed"}
-              )
-            `.execute(ctx.db);
-          }
-        }
-
-        const finalStatus = failed === 0 ? "succeeded" : imported > 0 ? "succeeded" : "failed";
-
-        await sql`
-          UPDATE data.import_jobs
-          SET status = ${finalStatus},
-              rows_imported = ${imported},
-              rows_failed = ${failed},
-              finished_at = now()
-          WHERE id = ${importJobId}
-        `.execute(ctx.db);
-
-        await sql`
-          UPDATE data.long_operations
-          SET status = 'completed',
-              progress = ${JSON.stringify({ imported, failed })}::jsonb,
-              completed_at = now(),
-              updated_at = now()
-          WHERE id = ${longOpId}
-        `.execute(ctx.db);
-
-        if (ctx.redis) {
-          const queue = createQueue(QueueNames.IMPORT, ctx.redis);
-          await queue.add("import.completed", { importJobId });
-        }
-
-        void reply.code(202).send({
-          importJobId: pid("imp", importJobId),
-          longOperationId: pid("lop", longOpId),
-          rowsImported: imported,
-          rowsFailed: failed,
-          status: finalStatus,
-        });
-      } catch (err) {
-        handleRouteError(request, reply, err);
+        const p = res.json() as { detail?: string; title?: string; errors?: { message: string }[] };
+        message = p.errors?.map((e) => e.message).join("; ") || p.detail || p.title || message;
+      } catch {
+        /* keep default */
       }
-    },
-  );
-
-  app.post<{ Params: { baseId: string } }>(
-    "/v1/bases/:baseId/export/csv",
-    async (request, reply) => {
-      try {
-        const user = request.user;
-        if (!user) {
-          notFound(request, reply);
-          return;
-        }
-
-        const baseId = parsePid(request.params.baseId, "bas");
-        const base = await resolveBaseContext(ctx.db, user.id, baseId);
-        if (!base.ok) {
-          notFound(request, reply, "Base not found");
-          return;
-        }
-
-        const body = exportBody.parse(request.body);
-        const tableId = parsePid(body.tableId, "tbl");
-        const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
-        if (!table.ok) {
-          notFound(request, reply, "Table not found");
-          return;
-        }
-
-        const fieldRows = await loadTableFields(ctx.db, tableId);
-        const records = await sql<{ id: string; cells: Record<string, unknown> }>`
-          SELECT id, cells
-          FROM data.records
-          WHERE table_id = ${tableId} AND deleted_at IS NULL
-          ORDER BY row_number ASC
-          LIMIT 10000
-        `.execute(ctx.db);
-
-        const headers = fieldRows.map((f) => f.name);
-        const lines = [headers.map(escapeCsv).join(",")];
-
-        for (const rec of records.rows) {
-          const values = fieldRows.map((f) => {
-            const raw = rec.cells[String(f.slot)];
-            if (raw === null || raw === undefined) return "";
-            return typeof raw === "string" ? raw : JSON.stringify(raw);
-          });
-          lines.push(values.map(escapeCsv).join(","));
-        }
-
-        const csv = lines.join("\n");
-        const exportJobId = generateUuidV7();
-
-        await sql`
-          INSERT INTO data.export_jobs (
-            id, workspace_id, base_id, table_id, status, row_count, requested_by, finished_at
-          ) VALUES (
-            ${exportJobId}, ${base.workspaceId}, ${baseId}, ${tableId},
-            'succeeded', ${records.rows.length}, ${user.id}, now()
-          )
-        `.execute(ctx.db);
-
-        void reply.send({
-          exportJobId: pid("exp", exportJobId),
-          format: "csv",
-          rowCount: records.rows.length,
-          csv,
-        });
-      } catch (err) {
-        handleRouteError(request, reply, err);
+      if (res.statusCode >= 500 || res.statusCode === 401 || res.statusCode === 403 || res.statusCode === 402) {
+        throw Object.assign(new Error(message), { statusCode: res.statusCode });
       }
-    },
-  );
-}
-
-function escapeCsv(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
+      return { created: 0, errors: [{ row: rowOffset + 1, message }] };
+    }
+    if (res.statusCode === 401 || res.statusCode === 403 || res.statusCode === 402) {
+      const p = res.json() as { detail?: string };
+      throw Object.assign(new Error(p.detail ?? "Import not allowed"), { statusCode: res.statusCode });
+    }
+    // Bisect to isolate the bad rows.
+    const mid = Math.ceil(rows.length / 2);
+    const left = await writeBatch(request, baseParam, tableParam, rows.slice(0, mid), typecast, rowOffset);
+    const right = await writeBatch(request, baseParam, tableParam, rows.slice(mid), typecast, rowOffset + mid);
+    return { created: left.created + right.created, errors: [...left.errors, ...right.errors] };
   }
-  return value;
+
+  async function handleImport(request: FastifyRequest<{ Params: { baseId: string } }>, reply: FastifyReply) {
+    const user = request.user;
+    if (!user) {
+      notFound(request, reply);
+      return;
+    }
+    const baseId = parsePid(request.params.baseId, "bas");
+    const base = await resolveBaseContext(ctx.db, user.id, baseId);
+    if (!base.ok) {
+      notFound(request, reply, "Base not found");
+      return;
+    }
+    const snapshot = await compileForUser(ctx.db, user.id, baseId);
+    assertCan(snapshot, "record.create");
+
+    const body = importBody.parse(request.body);
+    const tableId = parsePid(body.tableId, "tbl");
+    const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
+    if (!table.ok) {
+      notFound(request, reply, "Table not found");
+      return;
+    }
+    await limits.assertCanCreateRecord(base.orgId, baseId, body.rows.length);
+
+    // Job bookkeeping (one job across chunked requests).
+    let importJobId: string;
+    if (body.importJobId) {
+      importJobId = parsePid(body.importJobId, "imp");
+      const job = await sql<{ id: string }>`
+        SELECT id FROM data.import_jobs
+        WHERE id = ${importJobId} AND base_id = ${baseId} AND created_by = ${user.id}
+      `.execute(ctx.db);
+      if (!job.rows[0]) {
+        notFound(request, reply, "Import job not found");
+        return;
+      }
+    } else {
+      importJobId = generateUuidV7();
+      await sql`
+        INSERT INTO data.import_jobs (
+          id, workspace_id, base_id, table_id, status, source_filename, rows_total, created_by
+        ) VALUES (
+          ${importJobId}, ${base.workspaceId}, ${baseId}, ${tableId}, 'running',
+          ${body.filename ?? "import.csv"}, ${body.totalRows ?? body.rows.length}, ${user.id}
+        )
+      `.execute(ctx.db);
+    }
+
+    let imported = 0;
+    const errors: RowError[] = [];
+    for (let i = 0; i < body.rows.length; i += BATCH) {
+      const chunk = body.rows.slice(i, i + BATCH);
+      const r = await writeBatch(
+        request,
+        pid("bas", baseId),
+        pid("tbl", tableId),
+        chunk,
+        body.typecast,
+        body.rowOffset + i,
+      );
+      imported += r.created;
+      errors.push(...r.errors);
+    }
+
+    for (const e of errors.slice(0, 500)) {
+      await sql`
+        INSERT INTO data.import_errors (id, import_job_id, workspace_id, source_row, message)
+        VALUES (${generateUuidV7()}, ${importJobId}, ${base.workspaceId}, ${e.row}, ${e.message.slice(0, 1000)})
+      `.execute(ctx.db);
+    }
+    const totals = await sql<{ rows_imported: string; rows_failed: string }>`
+      UPDATE data.import_jobs
+      SET rows_imported = rows_imported + ${imported},
+          rows_failed = rows_failed + ${errors.length},
+          status = CASE WHEN ${body.final} THEN
+                     (CASE WHEN rows_imported + ${imported} = 0 AND rows_failed + ${errors.length} > 0
+                           THEN 'failed' ELSE 'succeeded' END)
+                   ELSE 'running' END,
+          finished_at = CASE WHEN ${body.final} THEN now() ELSE finished_at END
+      WHERE id = ${importJobId}
+      RETURNING rows_imported::text, rows_failed::text
+    `.execute(ctx.db);
+
+    void reply.code(200).send({
+      importJobId: pid("imp", importJobId),
+      rowsImported: imported,
+      rowsFailed: errors.length,
+      errors,
+      totalImported: Number(totals.rows[0]?.rows_imported ?? imported),
+      totalFailed: Number(totals.rows[0]?.rows_failed ?? errors.length),
+      status: body.final ? (imported === 0 && errors.length > 0 ? "failed" : "succeeded") : "running",
+    });
+  }
+
+  app.post<{ Params: { baseId: string } }>("/v1/bases/:baseId/import", async (request, reply) => {
+    try {
+      await handleImport(request, reply);
+    } catch (err) {
+      sendImportError(request, reply, err);
+    }
+  });
+  // Legacy path (same body).
+  app.post<{ Params: { baseId: string } }>("/v1/bases/:baseId/import/csv", async (request, reply) => {
+    try {
+      await handleImport(request, reply);
+    } catch (err) {
+      sendImportError(request, reply, err);
+    }
+  });
+
+  function sendImportError(request: FastifyRequest, reply: FastifyReply, err: unknown) {
+    const status = (err as { statusCode?: number })?.statusCode;
+    if (status && err instanceof Error) {
+      void reply
+        .code(status)
+        .header("content-type", "application/problem+json")
+        .send({ code: status === 402 ? "PLAN_LIMIT_EXCEEDED" : "FORBIDDEN", title: "Import failed", status, detail: err.message, requestId: request.id });
+      return;
+    }
+    handleWave4Error(request, reply, err);
+  }
+
+  // ─────────────────────────── Export ───────────────────────────
+
+  async function buildExport(
+    tableId: string,
+    viewId: string | null,
+  ): Promise<{ header: string[]; rows: (string | number | boolean | null)[][]; fields: ExportField[]; name: string; xlsxRows: (string | number | boolean | null)[][] }> {
+    const t = await sql<{ name: string; primary_field_id: string | null }>`
+      SELECT name, primary_field_id FROM data.tables WHERE id = ${tableId}
+    `.execute(ctx.db);
+    const tableName = t.rows[0]?.name ?? "Export";
+    const primary = t.rows[0]?.primary_field_id ?? null;
+    const fieldRows = await sql<{ id: string; name: string; type: string; config: Record<string, unknown> }>`
+      SELECT id, name, type, config FROM data.fields
+      WHERE table_id = ${tableId} AND deleted_at IS NULL AND type <> 'button'
+      ORDER BY order_key COLLATE "C" ASC, slot ASC
+    `.execute(ctx.db);
+    const view = viewId ? await loadView(ctx.db, viewId) : null;
+    let fields: ExportField[] = fieldRows.rows.map((f) => ({
+      id: pid("fld", f.id),
+      name: f.name,
+      type: f.type,
+      config: f.config ?? {},
+    }));
+    if (view) {
+      const hidden = new Set(view.config.hiddenFieldIds);
+      const order = new Map(view.config.fieldOrder.map((id, i) => [id, i]));
+      const primaryPid = primary ? pid("fld", primary) : null;
+      fields = fields
+        .filter((f) => f.id === primaryPid || !hidden.has(f.id))
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => {
+          if (a.f.id === primaryPid) return -1;
+          if (b.f.id === primaryPid) return 1;
+          const pa = order.get(a.f.id);
+          const pb = order.get(b.f.id);
+          if (pa !== undefined && pb !== undefined) return pa - pb;
+          if (pa !== undefined) return -1;
+          if (pb !== undefined) return 1;
+          return a.i - b.i;
+        })
+        .map((x) => x.f);
+    }
+
+    const absoluteUrl = (u: string) => (u.startsWith("/") ? `${ctx.env.API_URL.replace(/\/$/, "")}${u}` : u);
+    const rows: (string | number | boolean | null)[][] = [];
+    const xlsxRows: (string | number | boolean | null)[][] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await executeRecordQuery(ctx.db, tableId, {
+        pageSize: 500,
+        ...(view?.config.filter ? { filter: view.config.filter } : {}),
+        ...(view?.config.sorts.length
+          ? { sort: view.config.sorts.map((s) => ({ fieldId: s.fieldId, direction: s.direction })) }
+          : {}),
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const rec of page.records as unknown as { fields: Record<string, unknown> }[]) {
+        rows.push(fields.map((f) => exportValue(f, rec.fields[f.id], { absoluteUrl })));
+        xlsxRows.push(fields.map((f) => exportValue(f, rec.fields[f.id], { absoluteUrl, keepNumbers: true })));
+      }
+      cursor = page.nextCursor;
+    } while (cursor && rows.length < MAX_EXPORT_ROWS);
+
+    return {
+      header: fields.map((f) => f.name),
+      rows,
+      xlsxRows,
+      fields,
+      name: view ? `${tableName}-${view.name}` : tableName,
+    };
+  }
+
+  function fileName(name: string, ext: string): string {
+    const safe = name.replace(/[^\w\- ]+/g, "_").trim() || "export";
+    return `${safe}.${ext}`;
+  }
+
+  app.get<{
+    Params: { baseId: string; tableId: string };
+    Querystring: { format?: string; viewId?: string };
+  }>("/v1/bases/:baseId/tables/:tableId/export", async (request, reply) => {
+    try {
+      const user = request.user;
+      if (!user) {
+        notFound(request, reply);
+        return;
+      }
+      const baseId = parsePid(request.params.baseId, "bas");
+      const tableId = parsePid(request.params.tableId, "tbl");
+      const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
+      if (!table.ok) {
+        notFound(request, reply, "Table not found");
+        return;
+      }
+      const snapshot = await compileForUser(ctx.db, user.id, baseId);
+      assertCan(snapshot, "export.data");
+      const format = (request.query.format ?? "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        validationProblem(request, reply, "format must be csv or xlsx");
+        return;
+      }
+      let viewId: string | null = null;
+      if (request.query.viewId) {
+        viewId = parsePid(request.query.viewId, "viw");
+        const v = await loadView(ctx.db, viewId);
+        if (!v || v.tableId !== tableId) {
+          notFound(request, reply, "View not found");
+          return;
+        }
+      }
+      const data = await buildExport(tableId, viewId);
+      await sql`
+        INSERT INTO data.export_jobs (
+          id, workspace_id, base_id, table_id, status, row_count, requested_by, finished_at
+        ) VALUES (
+          ${generateUuidV7()}, ${table.workspaceId}, ${baseId}, ${tableId},
+          'succeeded', ${data.rows.length}, ${user.id}, now()
+        )
+      `.execute(ctx.db).catch(() => undefined);
+
+      if (format === "xlsx") {
+        const buf = buildXlsx(data.name, [data.header, ...data.xlsxRows]);
+        void reply
+          .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+          .header("Content-Disposition", `attachment; filename="${fileName(data.name, "xlsx")}"`)
+          .header("X-Row-Count", String(data.rows.length))
+          .send(buf);
+        return;
+      }
+      const csv = toCsv([data.header, ...data.rows]);
+      void reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="${fileName(data.name, "csv")}"`)
+        .header("X-Row-Count", String(data.rows.length))
+        .send(csv);
+    } catch (err) {
+      handleWave4Error(request, reply, err);
+    }
+  });
+
+  // Legacy JSON export (kept for API compatibility).
+  app.post<{ Params: { baseId: string } }>("/v1/bases/:baseId/export/csv", async (request, reply) => {
+    try {
+      const user = request.user;
+      if (!user) {
+        notFound(request, reply);
+        return;
+      }
+      const baseId = parsePid(request.params.baseId, "bas");
+      const body = z.object({ tableId: z.string(), viewId: z.string().optional() }).parse(request.body);
+      const tableId = parsePid(body.tableId, "tbl");
+      const table = await resolveTableContext(ctx.db, user.id, baseId, tableId);
+      if (!table.ok) {
+        notFound(request, reply, "Table not found");
+        return;
+      }
+      const snapshot = await compileForUser(ctx.db, user.id, baseId);
+      assertCan(snapshot, "export.data");
+      const data = await buildExport(tableId, body.viewId ? parsePid(body.viewId, "viw") : null);
+      void reply.send({
+        format: "csv",
+        rowCount: data.rows.length,
+        csv: toCsv([data.header, ...data.rows]),
+      });
+    } catch (err) {
+      handleWave4Error(request, reply, err);
+    }
+  });
 }

@@ -365,7 +365,6 @@ export function publicViewConfig(config: ViewConfig): Record<string, unknown> {
   return {
     sorts: config.sorts,
     groups: config.groups,
-    hiddenFieldIds: config.hiddenFieldIds,
     fieldOrder: config.fieldOrder,
     fieldWidths: config.fieldWidths,
     frozenFieldCount: config.frozenFieldCount,

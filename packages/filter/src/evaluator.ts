@@ -61,11 +61,20 @@ function dateOf(v: unknown): string | null {
   return typeof v === "string" && DATE_PREFIX_RE.test(v) ? v.slice(0, 10) : null;
 }
 
-function tsOf(v: unknown): Date | null {
+/** Parse an ISO date/datetime exactly like the SQL compiler (strict, no day rollover). */
+export function parseIsoInstant(v: unknown): Date | null {
   if (typeof v !== "string" || !ISO_RE.test(v)) return null;
-  const d = new Date(v.length === 10 ? `${v}T00:00:00Z` : v);
+  const y = Number(v.slice(0, 4));
+  const mo = Number(v.slice(5, 7));
+  const day = Number(v.slice(8, 10));
+  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (day > last) return null;
+  const s = v.length === 10 ? `${v}T00:00:00Z` : v.replace(" ", "T");
+  const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
 }
+
+const tsOf = parseIsoInstant;
 
 function boolOf(v: unknown): boolean {
   return v === true || v === "true" || v === 1;

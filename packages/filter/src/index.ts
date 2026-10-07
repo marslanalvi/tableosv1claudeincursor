@@ -5,6 +5,7 @@ export {
   isEmptyFor,
   textOf,
   numOf,
+  parseIsoInstant,
   andGroup,
   orGroup,
   type EvalField,

@@ -18,7 +18,10 @@ export async function handleCommentCreatedNotification(
     commentId?: string;
     recordId?: string;
     tableId?: string;
+    notificationsCreated?: boolean;
   };
+  // The API now creates comment notifications inline (with actor + link).
+  if (data.notificationsCreated) return;
   const commentId = data.commentId;
   const recordId = data.recordId;
   const tableId = data.tableId;

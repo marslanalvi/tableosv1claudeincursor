@@ -220,6 +220,16 @@ export interface ShareWire {
 }
 
 export async function createFormShare(baseId: string, viewId: string): Promise<ShareWire> {
+  // Reuse an active form share for this view when one exists.
+  try {
+    const existing = await request<{ shares: ShareWire[] }>(
+      `/v1/bases/${baseId}/shares?targetId=${encodeURIComponent(viewId)}&targetType=form`,
+    );
+    const found = existing.shares?.find((s) => s.token || s.url);
+    if (found) return found;
+  } catch {
+    /* fall through to create */
+  }
   const res = await request<{ share: ShareWire } | ShareWire>(`/v1/bases/${baseId}/shares`, {
     method: "POST",
     json: { targetType: "form", targetId: viewId },
@@ -231,5 +241,5 @@ export function publicFormUrl(share: ShareWire): string {
   if (share.publicUrl) return share.publicUrl;
   if (share.url) return share.url;
   const host = window.location.hostname || "localhost";
-  return `${window.location.protocol}//${host}:5184/s/${share.token}`;
+  return `${window.location.protocol}//${host}:5284/f/${share.token}`;
 }

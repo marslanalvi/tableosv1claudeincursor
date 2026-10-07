@@ -9,6 +9,7 @@ import {
   type FieldLike,
   type FieldUiServices,
   type SelectOption,
+  type TableLike,
 } from "@tabula/field-ui";
 import { api, request, type BaseDetail } from "../../lib/api.ts";
 import { fieldsApi, listBaseCollaborators } from "../../lib/api-areas/fields.ts";
@@ -90,7 +91,7 @@ export function useFieldServices(baseId: string): FieldUiServices {
     const tableById = (id: string) =>
       (qc.getQueryData<BaseDetail>(["bases", baseId])?.tables ?? tables ?? []).find((t) => t.id === id);
     return {
-      tables: (tables ?? []) as FieldUiServices["tables"],
+      tables: (tables ?? []) as unknown as TableLike[],
       async searchRecords(tableId, query) {
         const t = tableById(tableId);
         const page = await recordsApi.query(baseId, tableId, { search: query, pageSize: 50 });

@@ -516,3 +516,66 @@ export function randomOptionId(): string {
   for (const b of arr) s += chars[b % 62];
   return s;
 }
+
+/* ------------------------------------------------------------------ */
+/* Client-side grouping (list / timeline). */
+
+export interface RecordGroup<R> {
+  key: string;
+  label: string;
+  field: FieldDto;
+  color?: string | undefined;
+  records: R[];
+  children: RecordGroup<R>[];
+}
+
+function groupKey(field: FieldDto, v: unknown): { key: string; label: string; rank: number | string; color?: string | undefined } {
+  if (v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0)) {
+    return { key: "__empty__", label: "(Empty)", rank: -Infinity };
+  }
+  if (field.type === "single_select") {
+    const opts = selectOptions(field);
+    const i = opts.findIndex((o) => o.id === v);
+    return { key: String(v), label: opts[i]?.label ?? String(v), rank: i < 0 ? 1e9 : i, color: opts[i]?.color };
+  }
+  if (typeof v === "number") return { key: String(v), label: valueToText(field, v), rank: v };
+  if (typeof v === "boolean") return { key: String(v), label: v ? "Checked" : "Unchecked", rank: v ? 1 : 0 };
+  if (DATE_FIELD_TYPES.has(field.type) && typeof v === "string") {
+    const d = parseDateValue(v);
+    const k = d ? ymd(d) : v;
+    return { key: k, label: d ? d.toLocaleDateString() : v, rank: k };
+  }
+  const label = valueToText(field, v);
+  return { key: label, label, rank: label.toLowerCase() };
+}
+
+export function groupRecords<R extends { fields: Record<string, unknown> }>(
+  records: R[],
+  groups: { fieldId: string; direction: "asc" | "desc" }[],
+  fields: FieldDto[],
+): RecordGroup<R>[] {
+  const [first, ...rest] = groups;
+  if (!first) return [];
+  const field = fields.find((f) => f.id === first.fieldId);
+  if (!field) return groupRecords(records, rest, fields);
+  const map = new Map<string, { label: string; rank: number | string; color?: string | undefined; records: R[] }>();
+  for (const r of records) {
+    const g = groupKey(field, r.fields[field.id]);
+    if (!map.has(g.key)) map.set(g.key, { label: g.label, rank: g.rank, color: g.color, records: [] });
+    map.get(g.key)!.records.push(r);
+  }
+  const entries = [...map.entries()].sort((a, b) => {
+    const x = a[1].rank;
+    const y = b[1].rank;
+    const cmp = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+    return first.direction === "desc" ? -cmp : cmp;
+  });
+  return entries.map(([key, g]) => ({
+    key,
+    label: g.label,
+    field,
+    color: g.color,
+    records: g.records,
+    children: rest.length ? groupRecords(g.records, rest, fields) : [],
+  }));
+}

@@ -171,8 +171,11 @@ type Node = { kind: "and" | "or"; children: Node[] } | Cond;
 /** Small client-side evaluator used for "color by conditions". */
 export function matchesFilter(node: Node | null | undefined, rec: { fields: Record<string, unknown> }, fields: FieldLike[]): boolean {
   if (!node) return true;
-  if (node.kind === "and") return node.children.every((c) => matchesFilter(c, rec, fields));
-  if (node.kind === "or") return node.children.some((c) => matchesFilter(c, rec, fields));
+  if (node.kind !== "condition") {
+    return node.kind === "and"
+      ? node.children.every((c) => matchesFilter(c, rec, fields))
+      : node.children.some((c) => matchesFilter(c, rec, fields));
+  }
   const field = fields.find((f) => f.id === node.fieldId);
   const v = rec.fields[node.fieldId];
   const text = field ? cellValueToText(field, v).toLowerCase() : String(v ?? "").toLowerCase();

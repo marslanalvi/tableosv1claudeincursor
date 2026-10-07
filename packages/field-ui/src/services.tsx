@@ -24,7 +24,7 @@ export interface FieldUiServices {
   /** Add an option to a select field's config; resolves with the new option. */
   createSelectOption?(field: FieldLike, label: string): Promise<SelectOption>;
   /** Tables of the base (used by link pickers and config editors). */
-  tables?: TableLike[];
+  tables?: TableLike[] | undefined;
 }
 
 const Ctx = createContext<FieldUiServices>({});

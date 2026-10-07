@@ -1,45 +1,51 @@
-import { formatCellDisplay } from "@tabula/field-ui";
-import type { RecordDto, TableDto } from "../../lib/api.ts";
+import { useEffect } from "react";
+import { RecordCard, cardFields, coverUrl } from "./RecordCard.tsx";
+import { useRecordWrites, useViewRecords, type ViewComponentProps } from "./view-hooks.ts";
 import styles from "./views.module.css";
 
-export function GalleryView({
-  table,
-  records,
-}: {
-  table: TableDto;
-  records: RecordDto[];
-}) {
-  const primaryId = table.primaryFieldId;
-  const primaryField = table.fields.find((f) => f.id === primaryId);
+export function GalleryView(props: ViewComponentProps) {
+  const { baseId, table, view, config, canEdit, search, onOpenRecord, onCount } = props;
+  const g = config.gallery ?? {};
+  const cover = g.coverFieldId ?? null;
+  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const writes = useRecordWrites(baseId, table.id, queryKey);
+  useEffect(() => onCount?.(records.length), [records.length, onCount]);
+  const fields = cardFields(table, config, [cover]);
+
+  async function add() {
+    const rec = await writes.create({});
+    if (rec) onOpenRecord(rec.id);
+  }
 
   return (
-    <div className={styles.gallery}>
-      {records.map((record) => {
-        const raw = record.fields[primaryId];
-        const title = primaryField
-          ? formatCellDisplay(primaryField.type, raw, primaryField.config)
-          : String(raw ?? "Untitled");
-        return (
-          <article key={record.id} className={styles.card}>
-            <div className={styles.cardTitle}>{title || "Untitled"}</div>
-            {table.fields
-              .filter((f) => f.id !== primaryId)
-              .slice(0, 3)
-              .map((field) => (
-                <div key={field.id} style={{ fontSize: "var(--tabula-font-size-sm)" }}>
-                  <span style={{ color: "var(--tabula-color-text-muted)" }}>
-                    {field.name}:{" "}
-                  </span>
-                  {formatCellDisplay(
-                    field.type,
-                    record.fields[field.id],
-                    field.config,
-                  )}
-                </div>
-              ))}
-          </article>
-        );
-      })}
+    <div className={styles.galleryWrap}>
+      {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
+      {isLoading ? <div className={styles.loading}>Loading records…</div> : null}
+      <div className={styles.gallery}>
+        {records.map((r) => (
+          <RecordCard
+            key={r.id}
+            table={table}
+            config={config}
+            record={r}
+            fields={fields}
+            cover={cover ? coverUrl(r, cover) : null}
+            coverFit={g.coverFit ?? "cover"}
+            coverHeight={180}
+            onOpen={() => onOpenRecord(r.id)}
+            maxFields={8}
+          />
+        ))}
+        {canEdit ? (
+          <button type="button" className={styles.galleryAdd} onClick={() => void add()}>
+            <span aria-hidden>+</span>
+            Add a record
+          </button>
+        ) : null}
+      </div>
+      {!isLoading && records.length === 0 && !canEdit ? (
+        <p className={styles.muted}>No records match this view.</p>
+      ) : null}
     </div>
   );
 }

@@ -1,0 +1,307 @@
+/* Shared shell primitives (workstream F), per DESIGN-airtable.md */
+
+/* ---------- Buttons ---------- */
+.btn,
+.btnPrimary,
+.btnDanger,
+.btnGhost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--tabula-radius-lg);
+  font-size: var(--tabula-font-size-md);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid var(--tabula-color-border);
+  background: var(--tabula-color-bg);
+  color: var(--tabula-color-text);
+  white-space: nowrap;
+}
+.btn:active {
+  background: var(--tabula-color-bg-subtle);
+}
+.btnPrimary {
+  background: var(--tabula-color-primary);
+  border-color: var(--tabula-color-primary);
+  color: var(--tabula-color-on-primary);
+}
+.btnPrimary:active {
+  background: var(--tabula-color-primary-active);
+}
+.btnDanger {
+  background: var(--tabula-color-danger);
+  border-color: var(--tabula-color-danger);
+  color: #fff;
+}
+.btnGhost {
+  border-color: transparent;
+  background: transparent;
+  padding: 0 10px;
+}
+.btnGhost:active {
+  background: var(--tabula-color-bg-strong);
+}
+.btn:disabled,
+.btnPrimary:disabled,
+.btnDanger:disabled,
+.btnGhost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btnSm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--tabula-font-size-sm);
+  border-radius: var(--tabula-radius-sm);
+}
+
+/* ---------- Inputs ---------- */
+.input,
+.select {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-sm);
+  background: var(--tabula-color-bg);
+  color: var(--tabula-color-text);
+  font-size: var(--tabula-font-size-md);
+}
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--tabula-color-info-border);
+  box-shadow: 0 0 0 2px var(--tabula-color-focus-ring);
+}
+.label {
+  display: block;
+  font-size: var(--tabula-font-size-sm);
+  font-weight: 500;
+  color: var(--tabula-color-text-muted);
+  margin-bottom: 6px;
+}
+.field {
+  margin-bottom: 16px;
+}
+.error {
+  color: var(--tabula-color-danger);
+  font-size: var(--tabula-font-size-sm);
+  margin: 8px 0 0;
+}
+.muted {
+  color: var(--tabula-color-text-muted);
+}
+
+/* ---------- Dialog ---------- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(24, 29, 38, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 16px;
+  z-index: 1000;
+}
+.dialog {
+  background: var(--tabula-color-bg);
+  border-radius: var(--tabula-radius-lg);
+  box-shadow: var(--tabula-shadow-lg);
+  width: 100%;
+  max-width: 440px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.dialogWide {
+  max-width: 720px;
+}
+.dialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 8px;
+}
+.dialogTitle {
+  font-size: var(--tabula-font-size-xl);
+  font-weight: 500;
+  margin: 0;
+}
+.dialogBody {
+  padding: 8px 24px 16px;
+  overflow: auto;
+  color: var(--tabula-color-text-body);
+}
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 24px 20px;
+}
+.iconBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--tabula-radius-full);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--tabula-color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.iconBtn:active {
+  background: var(--tabula-color-bg-strong);
+}
+
+/* ---------- Menu ---------- */
+.menuAnchor {
+  position: relative;
+  display: inline-flex;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  background: var(--tabula-color-bg);
+  border: 1px solid var(--tabula-color-border);
+  border-radius: var(--tabula-radius-md);
+  box-shadow: var(--tabula-shadow-md);
+  padding: 6px;
+  z-index: 900;
+}
+.menuRight {
+  left: auto;
+  right: 0;
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--tabula-radius-sm);
+  font-size: var(--tabula-font-size-md);
+  color: var(--tabula-color-text);
+  cursor: pointer;
+}
+.menuItem:hover,
+.menuItem:focus-visible {
+  background: var(--tabula-color-bg-subtle);
+  outline: none;
+}
+.menuItem:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.menuItemDanger {
+  color: var(--tabula-color-danger);
+}
+.menuIcon {
+  width: 18px;
+  text-align: center;
+  color: var(--tabula-color-text-muted);
+}
+.menuHint {
+  margin-left: auto;
+  font-size: var(--tabula-font-size-xs);
+  color: var(--tabula-color-text-subtle);
+}
+.menuSep {
+  height: 1px;
+  background: var(--tabula-color-border);
+  margin: 6px 4px;
+}
+.menuLabel {
+  font-size: var(--tabula-font-size-xs);
+  color: var(--tabula-color-text-subtle);
+  padding: 6px 10px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Toasts ---------- */
+.toastStack {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--tabula-color-bg-dark);
+  color: var(--tabula-color-text-inverse);
+  border-radius: var(--tabula-radius-md);
+  padding: 10px 10px 10px 14px;
+  font-size: var(--tabula-font-size-md);
+  max-width: min(520px, calc(100vw - 32px));
+  box-shadow: var(--tabula-shadow-md);
+}
+.toastDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--tabula-color-signature-mint);
+}
+.toastDot[data-kind="error"] {
+  background: var(--tabula-color-signature-peach);
+}
+.toastDot[data-kind="info"] {
+  background: #9cc2ff;
+}
+.toastMessage {
+  flex: 1;
+  line-height: 1.35;
+}
+.toastAction {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: #fff;
+  border-radius: var(--tabula-radius-sm);
+  padding: 4px 10px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.toastClose {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* ---------- Avatar ---------- */
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--tabula-radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--tabula-color-primary);
+  flex: none;
+  user-select: none;
+}

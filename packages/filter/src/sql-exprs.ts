@@ -78,7 +78,8 @@ export function jsonExpr(f: SqlFieldInfo, a: string): string {
   const k = slotKey(f);
   if (f.isComputed) {
     const raw = `${a}.computed->'${k}'`;
-    return `(CASE WHEN jsonb_typeof(${raw}) = 'object' AND (${raw}) ? 'status' THEN ${raw}->'value' ELSE ${raw} END)`;
+    // Errored computed values (B: `computed._errors[slot]`, legacy `{status:"error"}`) read as empty.
+    return `(CASE WHEN (${a}.computed->'_errors') ? '${k}' THEN NULL WHEN jsonb_typeof(${raw}) = 'object' AND (${raw}) ? 'status' THEN (CASE WHEN ${raw}->>'status' = 'error' THEN NULL ELSE ${raw}->'value' END) ELSE ${raw} END)`;
   }
   return `${a}.cells->'${k}'`;
 }
@@ -326,8 +327,19 @@ export function groupKeyFor(f: SqlFieldInfo, a: string, p: SqlParams): { key: st
     case "checkbox":
       return { key: `to_jsonb(${boolExpr(f, a)})`, sort };
     case "single_select":
-      return { key: `to_jsonb(${selectIdExpr(f, a)})`, sort };
-    case "multi_select":
+    case "multi_select": {
+      // Normalize legacy label values to option ids so they group with their option.
+      const opts = selectOptionsOf(f.config);
+      const ids = p.add(opts.map((o) => o.id), "text[]");
+      const labels = p.add(opts.map((o) => o.label), "text[]");
+      const norm = (x: string) =>
+        `(CASE WHEN ${x} = ANY(${ids}) THEN ${x} ELSE COALESCE((SELECT o.i FROM unnest(${ids}, ${labels}) AS o(i, l) WHERE o.l = ${x} LIMIT 1), ${x}) END)`;
+      if (kind === "single_select") return { key: `to_jsonb(${norm(selectIdExpr(f, a))})`, sort };
+      return {
+        key: `(SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(${norm("s.id")} ORDER BY s.o) END FROM ${elemIdsSql(f, a)} s WHERE s.id <> '')`,
+        sort,
+      };
+    }
     case "collaborator":
     case "attachment":
       return {

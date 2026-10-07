@@ -84,7 +84,7 @@ export function useViewConfig(baseId: string, tableId: string, view: ViewDto | u
       patchViewInCaches(qc, baseId, tableId, viewId, (v) => ({
         ...v,
         config: { ...viewConfigOf(v), ...(v.config ?? {}), ...patch } as ViewWire["config"],
-      }));
+      }) as ViewWire);
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(flush, SAVE_DEBOUNCE_MS);
     },
@@ -187,7 +187,7 @@ export function useRecordWrites(baseId: string, tableId: string, queryKey: unkno
           const next = { ...r.fields };
           for (const [k, v] of Object.entries(shown)) {
             if (v === null || v === undefined || (Array.isArray(v) && v.length === 0)) delete next[k];
-            else next[k] = v;
+            else (next as Record<string, unknown>)[k] = v;
           }
           return { ...r, fields: next };
         }),

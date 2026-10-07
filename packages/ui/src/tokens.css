@@ -1,41 +1,88 @@
+/*
+ * Tabula design tokens — aligned to DESIGN-airtable.md (the required design
+ * standard): white canvas, near-black ink, hairline borders, link blue for
+ * selection/links, near-black primary buttons, Inter as the Haas substitute.
+ * Variable names are stable; every workstream consumes these.
+ */
 :root {
-  /* Cool slate + teal — light atmosphere */
-  --tabula-color-bg: #f4f7fa;
+  /* Surfaces */
+  --tabula-color-bg: #ffffff; /* canvas */
   --tabula-color-bg-elevated: #ffffff;
-  --tabula-color-bg-subtle: linear-gradient(165deg, #f8fafc 0%, #eef3f8 48%, #e8f0f4 100%);
+  --tabula-color-bg-subtle: #f8fafc; /* surface-soft */
+  --tabula-color-bg-strong: #e0e2e6; /* surface-strong */
+  --tabula-color-bg-dark: #181d26; /* surface-dark */
 
-  --tabula-color-text: #1e293b;
-  --tabula-color-text-muted: #64748b;
-  --tabula-color-text-inverse: #f8fafc;
+  /* Text */
+  --tabula-color-text: #181d26; /* ink */
+  --tabula-color-text-body: #333840; /* body */
+  --tabula-color-text-muted: #41454d; /* muted */
+  --tabula-color-text-subtle: #6b7079;
+  --tabula-color-text-inverse: #ffffff;
 
-  --tabula-color-border: #cbd5e1;
-  --tabula-color-border-strong: #94a3b8;
+  /* Lines */
+  --tabula-color-border: #dddddd; /* hairline */
+  --tabula-color-border-strong: #9297a0;
 
-  --tabula-color-accent: #0d9488;
-  --tabula-color-accent-hover: #0f766e;
-  --tabula-color-accent-muted: #ccfbf1;
-  --tabula-color-accent-subtle: #f0fdfa;
+  /* Brand action: near-black primary button */
+  --tabula-color-primary: #181d26;
+  --tabula-color-primary-active: #0d1218;
+  --tabula-color-on-primary: #ffffff;
 
-  --tabula-color-focus-ring: rgba(13, 148, 136, 0.35);
+  /* Accent = link blue (links, selection, focus, active tab) */
+  --tabula-color-accent: #1b61c9;
+  --tabula-color-accent-hover: #1a3866;
+  --tabula-color-accent-muted: #dbe7fb;
+  --tabula-color-accent-subtle: #eef4fd;
+  --tabula-color-link: #1b61c9;
+  --tabula-color-info: #254fad;
+  --tabula-color-info-border: #458fff;
 
-  --tabula-color-danger: #dc2626;
-  --tabula-color-success: #059669;
+  --tabula-color-focus-ring: rgba(69, 143, 255, 0.45);
 
+  --tabula-color-danger: #aa2d00; /* signature coral */
+  --tabula-color-danger-subtle: #fbeee9;
+  --tabula-color-success: #006400;
+  --tabula-color-success-border: #39bf45;
+
+  /* Signature surfaces (sparingly: cards, avatars, base icons) */
+  --tabula-color-signature-coral: #aa2d00;
+  --tabula-color-signature-forest: #0a2e0e;
+  --tabula-color-signature-cream: #f5e9d4;
+  --tabula-color-signature-peach: #fcab79;
+  --tabula-color-signature-mint: #a8d8c4;
+  --tabula-color-signature-yellow: #f4d35e;
+  --tabula-color-signature-mustard: #d9a441;
+
+  /* Radius: xs 2 / sm 6 (inputs) / md 10 (cards) / lg 12 (buttons, dialogs) */
+  --tabula-radius-xs: 2px;
   --tabula-radius-sm: 6px;
   --tabula-radius-md: 10px;
-  --tabula-radius-lg: 14px;
+  --tabula-radius-lg: 12px;
+  --tabula-radius-full: 9999px;
 
+  /* Spacing (4px base) */
   --tabula-space-1: 4px;
   --tabula-space-2: 8px;
   --tabula-space-3: 12px;
   --tabula-space-4: 16px;
   --tabula-space-5: 24px;
+  --tabula-space-6: 32px;
+  --tabula-space-7: 48px;
 
-  --tabula-font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
-  --tabula-font-size-sm: 0.8125rem;
-  --tabula-font-size-md: 0.9375rem;
-  --tabula-font-size-lg: 1.0625rem;
+  /* Type: Haas → Inter substitute; weights 400/500 only (600 = legal) */
+  --tabula-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", sans-serif;
+  --tabula-font-display: var(--tabula-font-sans);
+  --tabula-font-size-xs: 0.75rem; /* 12 */
+  --tabula-font-size-sm: 0.8125rem; /* 13 */
+  --tabula-font-size-md: 0.875rem; /* 14 body-md */
+  --tabula-font-size-lg: 1rem; /* 16 label/button */
+  --tabula-font-size-xl: 1.25rem; /* 20 title-md */
+  --tabula-font-size-2xl: 1.5rem; /* 24 title-lg */
+  --tabula-font-size-3xl: 2rem; /* 32 display-md */
 
-  --tabula-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --tabula-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  /* Elevation: color-block first, shadow second */
+  --tabula-shadow-sm: 0 1px 2px rgba(24, 29, 38, 0.06);
+  --tabula-shadow-md: 0 4px 16px rgba(24, 29, 38, 0.1);
+  --tabula-shadow-lg: 0 12px 32px rgba(24, 29, 38, 0.16);
 }

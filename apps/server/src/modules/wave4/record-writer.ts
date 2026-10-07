@@ -203,3 +203,54 @@ export async function updateRecordBySlot(
 function viaFor(via: WriteScope["via"]): string {
   return via ?? "api";
 }
+
+/** Soft-delete records (counters + one base change). */
+export async function softDeleteRecords(
+  ctx: AppContext,
+  scope: WriteScope,
+  recordIds: string[],
+): Promise<number> {
+  if (recordIds.length === 0) return 0;
+  let deleted = 0;
+  await withBaseTx(
+    ctx.db,
+    {
+      orgId: scope.orgId,
+      workspaceId: scope.workspaceId,
+      baseId: scope.baseId,
+      actor: scope.actor,
+      redis: ctx.redis,
+    },
+    async (_mctx, trx) => {
+      const res = await sql<{ id: string }>`
+        UPDATE data.records
+        SET deleted_at = now(), deleted_by = ${scope.userId}
+        WHERE table_id = ${scope.tableId} AND id = ANY(${recordIds}::uuid[]) AND deleted_at IS NULL
+        RETURNING id
+      `.execute(trx);
+      deleted = res.rows.length;
+      if (deleted > 0) {
+        await sql`
+          UPDATE data.tables SET record_count = GREATEST(record_count - ${deleted}, 0), updated_at = now()
+          WHERE id = ${scope.tableId}
+        `.execute(trx);
+        await sql`
+          UPDATE data.base_runtime SET record_count = GREATEST(record_count - ${deleted}, 0), updated_at = now()
+          WHERE base_id = ${scope.baseId}
+        `.execute(trx);
+      }
+      const ids = res.rows.map((r) => r.id);
+      return {
+        kind: "records" as const,
+        ops: ids.map((recordId) => ({ op: "record.deleted", recordId, tableId: scope.tableId })),
+        inverseOps: ids.map((recordId) => ({ op: "record.restored", recordId })),
+        tableIds: [scope.tableId],
+        eventType: ids.length === 1 ? "record.deleted" : "records.batch_deleted",
+        aggregateType: ids.length === 1 ? "record" : "table",
+        aggregateId: ids.length === 1 ? (ids[0] as string) : scope.tableId,
+        payload: { tableId: scope.tableId, recordIds: ids, ...(ids.length === 1 ? { recordId: ids[0] } : {}) },
+      };
+    },
+  );
+  return deleted;
+}
