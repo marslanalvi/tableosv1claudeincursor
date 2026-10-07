@@ -18,7 +18,7 @@ import { compileForUser } from "../access/compile.js";
 import { fieldRowToDto } from "../schema/field-dto.js";
 
 const nameBody = z.object({
-  name: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
 });
 
 function actorFromRequest(user: NonNullable<import("fastify").FastifyRequest["user"]>): MutationActor {

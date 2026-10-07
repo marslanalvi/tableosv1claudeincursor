@@ -10,7 +10,7 @@ import { assertCan } from "../access/assert.js";
 import { compileForWorkspace } from "../access/compile.js";
 
 const createBody = z.object({
-  name: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
 });
 
 export async function registerWorkspaceRoutes(

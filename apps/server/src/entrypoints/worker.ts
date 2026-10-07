@@ -42,11 +42,19 @@ async function main(): Promise<void> {
   const search = new PostgresFtsBackend(db);
   const eventBus = createEventBus(redis);
 
+  const logConsumed = (group: string, event: DomainEvent): void => {
+    log.info(
+      { group, eventId: event.id, eventType: event.type, baseSeq: event.baseSeq },
+      "Domain event consumed",
+    );
+  };
+
   await eventBus.subscribe(
     DOMAIN_EVENTS_TOPIC,
     "collab-notifications",
     async (event: DomainEvent) => {
       await handleCommentCreatedNotification(db, event);
+      logConsumed("collab-notifications", event);
     },
   );
 
@@ -55,6 +63,7 @@ async function main(): Promise<void> {
     "search-indexer",
     async (event: DomainEvent) => {
       await handleSearchIndexEvent(db, search, event);
+      logConsumed("search-indexer", event);
     },
   );
 

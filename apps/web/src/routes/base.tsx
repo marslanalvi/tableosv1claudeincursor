@@ -1,14 +1,6 @@
-import { Link, useRouter } from "@tanstack/react-router";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentType,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiProblemError, type ViewDto } from "../lib/api.ts";
 import { shellApi } from "../lib/api-areas/shell.ts";
 import {
@@ -23,6 +15,7 @@ import { AccountMenu } from "../features/base/AccountMenu.tsx";
 import { useUndoRedo } from "../features/base/useUndoRedo.ts";
 import { NotificationsBell } from "../features/notifications/NotificationsBell.tsx";
 import { ImportWizard } from "../features/import/ImportWizard.tsx";
+import { ExportMenu } from "../features/import/ExportMenu.tsx";
 import { ShareDialog } from "../features/share/ShareDialog.tsx";
 import { ViewsSidebar } from "../features/views/ViewsSidebar.tsx";
 import { FormsIndex } from "../features/views/FormsIndex.tsx";
@@ -36,18 +29,6 @@ import { TableGridPage } from "./table-grid.tsx";
 import styles from "./base.module.css";
 
 type BaseTab = "data" | "automations" | "interfaces" | "forms";
-
-// E's ExportMenu ({baseId, tableId, viewId}); falls back to a direct download.
-const exportModules = import.meta.glob("../features/import/ExportMenu.tsx");
-const exportLoader = Object.values(exportModules)[0];
-const LazyExportMenu = exportLoader
-  ? lazy(async () => {
-      const mod = (await exportLoader()) as {
-        ExportMenu: ComponentType<{ baseId: string; tableId: string; viewId?: string }>;
-      };
-      return { default: mod.ExportMenu };
-    })
-  : null;
 
 function readSearchFlag(name: string): boolean {
   try {
@@ -114,6 +95,17 @@ export function BasePage({ baseId }: { baseId: string }) {
   const [trashOpen, setTrashOpen] = useState(false);
   const [baseDialog, setBaseDialog] = useState<"rename" | "delete" | null>(null);
   const [pendingImport, setPendingImport] = useState(() => readSearchFlag("import"));
+
+  // `?table=tbl_…` (search results, notification links) selects the table.
+  const tableParam = useRouterState({
+    select: (s) => (s.location.search as Record<string, unknown>)["table"],
+  });
+  useEffect(() => {
+    if (typeof tableParam !== "string") return;
+    setActiveTableId(tableParam);
+    setActiveViewId(null);
+    setBaseTab("data");
+  }, [tableParam]);
 
   const resolvedTableId =
     activeTableId && tables.some((t) => t.id === activeTableId)
@@ -395,7 +387,7 @@ export function BasePage({ baseId }: { baseId: string }) {
                     activeViewId={activeView?.id ?? null}
                     onSelectView={setActiveViewId}
                     onCreateView={(type, visibility, name) =>
-                      createViewMutation.mutate({ type, visibility, ...(name ? { name } : {}) })
+                      createViewMutation.mutateAsync({ type, visibility, ...(name ? { name } : {}) })
                     }
                     onToggleFavorite={(view) => favoriteMutation.mutate(view)}
                     onJumpToOriginal={(view) => setActiveViewId(view.id)}
@@ -481,36 +473,20 @@ export function BasePage({ baseId }: { baseId: string }) {
         />
       ) : null}
       {exportTableId ? (
-        <Dialog title="Export CSV" onClose={() => setExportTableId(null)}>
-          {LazyExportMenu ? (
-            <Suspense fallback={<p className={uiStyles.muted}>Loading…</p>}>
-              <LazyExportMenu
-                baseId={baseId}
-                tableId={exportTableId}
-                {...(exportTableId === resolvedTableId && activeView?.id
-                  ? { viewId: activeView.id }
-                  : {})}
-              />
-            </Suspense>
-          ) : (
-            <>
-              <p>
-                Download <strong>{tableNames[exportTableId] ?? "this table"}</strong>
-                {exportTableId === resolvedTableId && activeView ? ` (view “${activeView.name}”)` : ""}{" "}
-                as a CSV file.
-              </p>
-              <a
-                className={uiStyles.btnPrimary}
-                href={`/v1/bases/${baseId}/tables/${exportTableId}/export?format=csv${
-                  exportTableId === resolvedTableId && activeView?.id ? `&viewId=${activeView.id}` : ""
-                }`}
-                download
-                onClick={() => setTimeout(() => setExportTableId(null), 300)}
-              >
-                Download CSV
-              </a>
-            </>
-          )}
+        <Dialog title="Export" onClose={() => setExportTableId(null)}>
+          <p className={uiStyles.muted} style={{ marginTop: 0 }}>
+            Download <strong>{tableNames[exportTableId] ?? "this table"}</strong>
+            {exportTableId === resolvedTableId && activeView ? ` (view “${activeView.name}”)` : ""}.
+          </p>
+          <ExportMenu
+            baseId={baseId}
+            tableId={exportTableId}
+            inline
+            onDone={() => setExportTableId(null)}
+            {...(exportTableId === resolvedTableId && activeView?.id
+              ? { viewId: activeView.id }
+              : {})}
+          />
         </Dialog>
       ) : null}
       {fieldsOpen && activeTable ? (
