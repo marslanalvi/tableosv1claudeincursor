@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, ApiProblemError, type TableDto } from "../../lib/api.ts";
 import { createFormShare, publicFormUrl, viewConfigOf, viewsApi, type ViewWire } from "../../lib/api-areas/views.ts";
 import { FormPreview } from "./FormView.tsx";
+import { setViewsInCaches } from "./view-utils.ts";
 import styles from "./views.module.css";
 
 /** Base "Forms" tab: every form view across the base's tables (CONTRACTS §10). */
@@ -46,8 +47,12 @@ export function FormsIndex({
     for (let i = 2; names.has(name); i += 1) name = `${table.name} form ${i}`;
     try {
       const res = await viewsApi.create(baseId, tableId, { name, type: "form" });
-      await qc.invalidateQueries({ queryKey: ["bases", baseId] });
-      await qc.invalidateQueries({ queryKey: ["views", baseId, tableId] });
+      // The Data tab picks its active view from these caches as soon as it mounts.
+      setViewsInCaches(qc, baseId, tableId, (list) =>
+        list.some((v) => v.id === res.view.id) ? list : [...list, res.view],
+      );
+      void qc.invalidateQueries({ queryKey: ["bases", baseId] });
+      void qc.invalidateQueries({ queryKey: ["views", baseId, tableId] });
       onOpenForm?.(tableId, res.view.id);
     } catch (err) {
       setError(err instanceof ApiProblemError ? (err.problem.detail ?? err.problem.title) : "Could not create form");

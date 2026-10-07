@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import type { TabulaDb } from "@tabula/db";
+import { authorize, type PermissionSnapshot } from "@tabula/permissions";
 import { pid } from "../../lib/public-ids.js";
 import { normalizeViewConfig, type ConfigFieldInfo, type ViewConfig } from "./config.js";
 
@@ -71,14 +72,32 @@ export async function loadTableConfigInfo(
   return out;
 }
 
-/** Whether `userId` may modify this view (name/config/visibility/delete). */
+export interface ViewEditRights {
+  isBaseCreator: boolean;
+  /** `view.update` on the base: needed for any non-personal view. */
+  canUpdateShared: boolean;
+}
+
+export function viewEditRights(snapshot: PermissionSnapshot): ViewEditRights {
+  return {
+    isBaseCreator: snapshot.effectiveBaseRole === "creator",
+    canUpdateShared: authorize(snapshot, "view.update"),
+  };
+}
+
+/**
+ * Whether `userId` may modify this view (name/config/visibility/delete).
+ * A boolean `rights` means "is base creator" with shared-view rights assumed.
+ */
 export function canEditView(
   row: Pick<ViewRow, "visibility" | "owner_user_id" | "created_by">,
   userId: string,
-  isBaseCreator = false,
+  rights: boolean | ViewEditRights = false,
 ): boolean {
+  const r = typeof rights === "boolean" ? { isBaseCreator: rights, canUpdateShared: true } : rights;
   if (row.visibility === "personal") return row.owner_user_id === userId;
-  if (row.visibility === "locked") return row.created_by === userId || isBaseCreator;
+  if (!r.canUpdateShared) return false;
+  if (row.visibility === "locked") return row.created_by === userId || r.isBaseCreator;
   return true;
 }
 
@@ -86,7 +105,7 @@ export function serializeView(
   row: ViewRow,
   userId: string,
   info: TableConfigInfo | undefined,
-  isBaseCreator = false,
+  rights: boolean | ViewEditRights = false,
 ): ViewWire {
   return {
     id: pid("viw", row.id),
@@ -99,7 +118,7 @@ export function serializeView(
     createdBy: row.created_by ? pid("usr", row.created_by) : null,
     isFavorite: Boolean(row.is_favorite),
     isMine: row.created_by === userId || row.owner_user_id === userId,
-    canEdit: canEditView(row, userId, isBaseCreator),
+    canEdit: canEditView(row, userId, rights),
     config: normalizeViewConfig(row.config, row.type, info?.fields ?? [], info?.name),
   };
 }

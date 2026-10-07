@@ -60,4 +60,8 @@ test("canEditView", () => {
   assert.equal(canEditView({ visibility: "locked", owner_user_id: null, created_by: "a" }, "b"), false);
   assert.equal(canEditView({ visibility: "locked", owner_user_id: null, created_by: "a" }, "b", true), true);
   assert.equal(canEditView({ visibility: "personal", owner_user_id: "a", created_by: "a" }, "b", true), false);
+  const viewer = { isBaseCreator: false, canUpdateShared: false };
+  assert.equal(canEditView({ visibility: "collaborative", owner_user_id: null, created_by: "a" }, "b", viewer), false);
+  assert.equal(canEditView({ visibility: "locked", owner_user_id: null, created_by: "b" }, "b", viewer), false);
+  assert.equal(canEditView({ visibility: "personal", owner_user_id: "b", created_by: "b" }, "b", viewer), true);
 });

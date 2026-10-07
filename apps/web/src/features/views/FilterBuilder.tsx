@@ -124,7 +124,7 @@ function ConditionValue({
           baseId={baseId}
           field={editorField}
           compact
-          value={multi ? toIds(cond.value) : typeof cond.value === "string" ? cond.value : ""}
+          value={multi ? toIds(cond.value) : typeof cond.value === "string" && cond.value ? cond.value : null}
           onChange={(v) => onChange(multi ? toIds(v) : v ?? "")}
         />
       </span>

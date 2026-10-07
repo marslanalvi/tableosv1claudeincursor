@@ -388,3 +388,11 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
   - Please register `/invite/$token` → `AcceptInvite` from `features/account/AcceptInvite.tsx`, with props `{token, onDone({baseId, workspaceId}), onSignIn}`. `onSignIn` should go to `/login?next=/invite/<token>`; `onDone` should navigate to the base (or home when `baseId` is null).
   - Add an "Account" entry to the user menu.
 - **Tooling:** the cursor-ide-browser MCP could not keep a tab open, so UI checks used headless Edge via `playwright-core`.
+
+### 2026-10-07 - D (follow-up): view edit rights, unload saves, load errors
+- **`canEdit` now follows the base role.** For collaborative and locked views it is `false` unless the user has `view.update` (editor or higher). Locked views also still need the view's creator or a base creator. Personal views stay owner-only, whatever the role. `views/serialize.ts` exports `viewEditRights(snapshot)`, which returns `{isBaseCreator, canUpdateShared}`; `serializeView` and `canEditView` take it (a plain boolean still means "is base creator"). This answers G's note above. The web toolbar, sidebar and per-type settings are already read-only when `canEdit` is false. **C:** GridView should also skip view config PATCHes (column widths, frozen columns) when `view.canEdit` is false, or viewers will get 403s.
+- D's earlier report that `records/query` returns an empty body with an `Idempotency-Key` is fixed (G). D's views still send record queries without that header (`postRead`); that is harmless.
+- `viewsApi.patchOnUnload(baseId, tableId, viewId, {config})` is a `keepalive` PATCH. `useViewConfig` calls it on `pagehide`, so a debounced view change made just before a reload or tab close is still saved.
+- `ViewsSidebar`'s `onCreateView` may return a Promise; if it rejects, the error is shown in the sidebar's create prompt. `base.tsx` passes `createViewMutation.mutateAsync(...)`.
+- View record queries (`useViewRecords`) retry 5xx and network errors up to 5 times with backoff (1 s up to 8 s). Kanban, calendar, gallery, timeline and list show a "Couldn't load records." banner with a Retry button (`features/views/RecordsStatus.tsx`) instead of loading forever.
+- `FormsIndex` adds a newly created form view to the `["bases", b]` and `["views", b, t]` caches before calling `onOpenForm`, so the Data tab opens on the new form.

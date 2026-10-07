@@ -4,6 +4,7 @@ import { request, type FieldDto } from "../../lib/api.ts";
 import type { ViewRecord } from "../../lib/api-areas/views.ts";
 import { useCollaborators } from "./field-value.tsx";
 import { RecordCard, cardFields, coverUrl } from "./RecordCard.tsx";
+import { RecordsStatus, statusProps } from "./RecordsStatus.tsx";
 import { useRecordWrites, useViewRecords, type ViewComponentProps } from "./view-hooks.ts";
 import { COLOR_NAMES, colorOf, randomOptionId, selectOptions } from "./view-utils.ts";
 import styles from "./views.module.css";
@@ -32,7 +33,8 @@ export function KanbanView(props: ViewComponentProps) {
   const k = config.kanban ?? { stackFieldId: null };
   const stackField = table.fields.find((f) => f.id === k.stackFieldId);
   const candidates = table.fields.filter((f) => f.type === "single_select" || f.type === "collaborator");
-  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const recordsQuery = useViewRecords(baseId, table, view?.id, config, search);
+  const { records, queryKey } = recordsQuery;
   const writes = useRecordWrites(baseId, table.id, queryKey);
   const collabs = useCollaborators(baseId, stackField?.type === "collaborator");
   const [drag, setDrag] = useState<{ id: string; over: { stack: string; beforeId: string | null } | null } | null>(null);
@@ -105,8 +107,9 @@ export function KanbanView(props: ViewComponentProps) {
     );
   }
 
-  const cover = k.coverFieldId ?? null;
-  const fieldsOnCard = cardFields(table, config, [stackField.id, cover]);
+  const coverFieldId = k.coverFieldId ?? null;
+  const cover = coverFieldId && records.some((r) => coverUrl(r, coverFieldId)) ? coverFieldId : null;
+  const fieldsOnCard = cardFields(table, config, [stackField.id, coverFieldId]);
   const collapsed = new Set(k.collapsedStacks ?? []);
   const manualOrder = config.sorts.length === 0;
 
@@ -186,7 +189,7 @@ export function KanbanView(props: ViewComponentProps) {
   return (
     <div className={styles.kanbanWrap}>
       {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
-      {isLoading ? <div className={styles.loading}>Loading records…</div> : null}
+      <RecordsStatus {...statusProps(recordsQuery)} />
       <div className={styles.kanban}>
         {visibleStacks.map((s) => {
           const list = byStack.get(s.key) ?? [];

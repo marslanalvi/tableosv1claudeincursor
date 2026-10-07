@@ -15,6 +15,7 @@ import {
   ymd,
   type RecordGroup,
 } from "./view-utils.ts";
+import { RecordsStatus, statusProps } from "./RecordsStatus.tsx";
 import styles from "./views.module.css";
 
 const PX_PER_DAY = { day: 44, week: 18, month: 5 } as const;
@@ -39,7 +40,8 @@ export function TimelineView(props: ViewComponentProps & { gantt?: boolean }) {
   const startField = table.fields.find((f) => f.id === t.startFieldId);
   const endField = table.fields.find((f) => f.id === t.endFieldId);
   const editable = (f: typeof startField) => Boolean(f && (f.type === "date" || f.type === "datetime"));
-  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const recordsQuery = useViewRecords(baseId, table, view?.id, config, search);
+  const { records, queryKey, isLoading } = recordsQuery;
   const writes = useRecordWrites(baseId, table.id, queryKey);
   const [drag, setDrag] = useState<DragState | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -204,6 +206,7 @@ export function TimelineView(props: ViewComponentProps & { gantt?: boolean }) {
   return (
     <div className={styles.timeline}>
       {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
+      <RecordsStatus {...statusProps(recordsQuery)} isLoading={false} />
       <div className={styles.calHeader}>
         <div className={styles.calNav}>
           <button
@@ -330,6 +333,8 @@ export function TimelineView(props: ViewComponentProps & { gantt?: boolean }) {
                 const left = dayDiff(s, range.min) * px;
                 const w = Math.max(px, (dayDiff(e, s) + 1) * px);
                 const color = recordColor(config, rec, table.fields) ?? "#cfdfff";
+                const label = primaryText(table, rec) || "Unnamed record";
+                const labelOutside = w < 90;
                 return (
                   <div key={row.key} className={styles.tlRow} style={{ height: ROW_H }}>
                     <div
@@ -346,7 +351,7 @@ export function TimelineView(props: ViewComponentProps & { gantt?: boolean }) {
                           onPointerDown={(ev) => onPointerDown(ev, rec.id, "start")}
                         />
                       ) : null}
-                      <span className={styles.tlBarLabel}>{primaryText(table, rec) || "Unnamed record"}</span>
+                      {labelOutside ? null : <span className={styles.tlBarLabel}>{label}</span>}
                       {canEdit && editable(endField) ? (
                         <span
                           className={styles.tlHandleR}
@@ -354,6 +359,11 @@ export function TimelineView(props: ViewComponentProps & { gantt?: boolean }) {
                         />
                       ) : null}
                     </div>
+                    {labelOutside ? (
+                      <span className={styles.tlBarLabelOutside} style={{ left: left + w + 6 }}>
+                        {label}
+                      </span>
+                    ) : null}
                   </div>
                 );
               })}

@@ -13,7 +13,7 @@ import { registerBaseManageRoutes } from "./manage-routes.js";
 import type { MutationActor } from "../../kernel/mutation.js";
 import { runTransactionWithAfterCommit, withBaseTx } from "../../kernel/mutation.js";
 import { bootstrapDefaultTable } from "./bootstrap-default-table.js";
-import { loadTableConfigInfo, serializeView } from "../views/serialize.js";
+import { loadTableConfigInfo, serializeView, viewEditRights } from "../views/serialize.js";
 import { compileForUser } from "../access/compile.js";
 import { fieldRowToDto } from "../schema/field-dto.js";
 
@@ -225,9 +225,9 @@ export async function registerBaseRoutes(
           ctx.db,
           tables.rows.map((t) => t.id),
         );
-        const viewIsBaseCreator = await compileForUser(ctx.db, user.id, baseId)
-          .then((snap) => snap.effectiveBaseRole === "creator")
-          .catch(() => false);
+        const viewRights = await compileForUser(ctx.db, user.id, baseId)
+          .then(viewEditRights)
+          .catch(() => ({ isBaseCreator: false, canUpdateShared: false }));
         const viewsByTable = new Map<string, typeof views.rows>();
         for (const view of views.rows) {
           const list = viewsByTable.get(view.table_id) ?? [];
@@ -245,7 +245,7 @@ export async function registerBaseRoutes(
             primaryFieldId: table.primary_field_id
               ? pid("fld", table.primary_field_id)
               : "",
-            // FieldDto (CONTRACTS §4) via workstream B's serializer.
+            // FieldDto (CONTRACTS ?4) via workstream B's serializer.
             fields: (fieldsByTable.get(table.id) ?? []).map((f) =>
               fieldRowToDto(
                 {
@@ -261,7 +261,7 @@ export async function registerBaseRoutes(
               ),
             ),
             views: (viewsByTable.get(table.id) ?? []).map((v) =>
-              serializeView(v, user.id, viewConfigInfo.get(table.id), viewIsBaseCreator),
+              serializeView(v, user.id, viewConfigInfo.get(table.id), viewRights),
             ),
           })),
         });

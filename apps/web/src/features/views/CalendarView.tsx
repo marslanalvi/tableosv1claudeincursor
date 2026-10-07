@@ -12,6 +12,7 @@ import {
   startOfDay,
   ymd,
 } from "./view-utils.ts";
+import { RecordsStatus, statusProps } from "./RecordsStatus.tsx";
 import styles from "./views.module.css";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -29,7 +30,8 @@ export function CalendarView(props: ViewComponentProps) {
   const endField = table.fields.find((f) => f.id === cal.endDateFieldId);
   const mode = cal.mode ?? "month";
   const [cursor, setCursor] = useState(() => startOfDay(new Date()));
-  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const recordsQuery = useViewRecords(baseId, table, view?.id, config, search);
+  const { records, queryKey, isLoading } = recordsQuery;
   const writes = useRecordWrites(baseId, table.id, queryKey);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overDay, setOverDay] = useState<string | null>(null);
@@ -143,6 +145,7 @@ export function CalendarView(props: ViewComponentProps) {
   return (
     <div className={styles.calendar}>
       {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
+      <RecordsStatus {...statusProps(recordsQuery)} isLoading={false} />
       <div className={styles.calHeader}>
         <div className={styles.calNav}>
           <button type="button" className={styles.secondaryBtn} onClick={() => setCursor(startOfDay(new Date()))}>

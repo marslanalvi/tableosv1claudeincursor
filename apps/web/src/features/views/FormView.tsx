@@ -127,7 +127,8 @@ export function FormPreview({
               if (errors[field.id]) setErrors((s) => ({ ...s, [field.id]: "" }));
             }}
           />
-          {errors[field.id] ? <div className={styles.fieldError}>{errors[field.id]}</div> : null}
+          {/* Keep the row until the next submit so fixing a field doesn't shift the submit button mid-click. */}
+          {field.id in errors ? <div className={styles.fieldError}>{errors[field.id] || "\u00a0"}</div> : null}
         </div>
       ))}
       {submitError ? <div className={styles.fieldError}>{submitError}</div> : null}

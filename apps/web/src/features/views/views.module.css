@@ -374,6 +374,19 @@ textarea.input {
   font-size: 13px;
 }
 
+.loadError {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 16px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #f3c2c2;
+  background: #fdf1f1;
+  color: #8a1c1c;
+  font-size: 13px;
+}
+
 .emptyState {
   max-width: 480px;
   margin: 64px auto;
@@ -1532,6 +1545,21 @@ textarea.input {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.tlBarLabelOutside {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  max-width: 240px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink);
+  font-size: 12px;
   pointer-events: none;
 }
 

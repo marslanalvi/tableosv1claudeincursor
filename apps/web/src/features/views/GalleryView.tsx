@@ -1,13 +1,15 @@
 import { useEffect } from "react";
 import { RecordCard, cardFields, coverUrl } from "./RecordCard.tsx";
 import { useRecordWrites, useViewRecords, type ViewComponentProps } from "./view-hooks.ts";
+import { RecordsStatus, statusProps } from "./RecordsStatus.tsx";
 import styles from "./views.module.css";
 
 export function GalleryView(props: ViewComponentProps) {
   const { baseId, table, view, config, canEdit, search, onOpenRecord, onCount } = props;
   const g = config.gallery ?? {};
   const cover = g.coverFieldId ?? null;
-  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const recordsQuery = useViewRecords(baseId, table, view?.id, config, search);
+  const { records, queryKey, isLoading } = recordsQuery;
   const writes = useRecordWrites(baseId, table.id, queryKey);
   useEffect(() => onCount?.(records.length), [records.length, onCount]);
   const fields = cardFields(table, config, [cover]);
@@ -20,7 +22,7 @@ export function GalleryView(props: ViewComponentProps) {
   return (
     <div className={styles.galleryWrap}>
       {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
-      {isLoading ? <div className={styles.loading}>Loading records…</div> : null}
+      <RecordsStatus {...statusProps(recordsQuery)} />
       <div className={styles.gallery}>
         {records.map((r) => (
           <RecordCard

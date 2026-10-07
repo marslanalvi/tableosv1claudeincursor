@@ -4,6 +4,7 @@ import type { ViewConfig, ViewRecord } from "../../lib/api-areas/views.ts";
 import { CellValueDisplay } from "./field-value.tsx";
 import { useRecordWrites, useViewRecords, type ViewComponentProps } from "./view-hooks.ts";
 import { colorOf, groupRecords, primaryText, recordColor, visibleFields, type RecordGroup } from "./view-utils.ts";
+import { RecordsStatus, statusProps } from "./RecordsStatus.tsx";
 import styles from "./views.module.css";
 
 function ListRow({
@@ -73,7 +74,8 @@ function ListRow({
 
 export function ListView(props: ViewComponentProps) {
   const { baseId, table, view, config, canEdit, search, onOpenRecord, onCount } = props;
-  const { records, queryKey, isLoading } = useViewRecords(baseId, table, view?.id, config, search);
+  const recordsQuery = useViewRecords(baseId, table, view?.id, config, search);
+  const { records, queryKey, isLoading } = recordsQuery;
   const writes = useRecordWrites(baseId, table.id, queryKey);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -137,7 +139,7 @@ export function ListView(props: ViewComponentProps) {
   return (
     <div className={styles.listWrap}>
       {writes.error ? <div className={styles.toastError}>{writes.error}</div> : null}
-      {isLoading ? <div className={styles.loading}>Loading records…</div> : null}
+      <RecordsStatus {...statusProps(recordsQuery)} />
       <div className={styles.listActions}>
         <button type="button" className={styles.linkBtn} onClick={() => setExpanded(new Set(records.map((r) => r.id)))}>
           Expand all

@@ -14,6 +14,8 @@ import { parsePid } from "../../lib/public-ids.js";
 import { forbidden, handleRouteError, notFound, sendProblem } from "../../http/errors.js";
 import { resolveTableContext } from "../access/helpers.js";
 import { compileForUser } from "../access/compile.js";
+import { assertCan } from "../access/assert.js";
+import type { PermissionSnapshot } from "@tabula/permissions";
 import { withBaseTx, type MutationActor } from "../../kernel/mutation.js";
 import {
   defaultConfigForType,
@@ -24,6 +26,7 @@ import {
   canEditView,
   loadTableConfigInfo,
   serializeView,
+  viewEditRights,
   type ViewRow,
 } from "./serialize.js";
 
@@ -139,7 +142,13 @@ export async function registerViewsRoutes(
       notFound(request, reply, "Table not found");
       return null;
     }
-    return { user, baseId, tableId, table };
+    const snapshot = await compileForUser(ctx.db, user.id, baseId);
+    return { user, baseId, tableId, table, snapshot };
+  }
+
+  /** Shared views need editor+; personal views need commenter+ (they require a signed-in collaborator). */
+  function assertCanCreate(snapshot: PermissionSnapshot, visibility: string): void {
+    assertCan(snapshot, visibility === "personal" ? "record.comment" : "view.create_collaborative");
   }
 
   // List views of a table.
@@ -160,10 +169,10 @@ export async function registerViewsRoutes(
           ORDER BY v.order_key ASC
         `.execute(ctx.db);
         const info = await loadTableConfigInfo(ctx.db, [r.tableId]);
-        const creator = await isBaseCreator(ctx.db, r.user.id, r.baseId);
+        const rights = viewEditRights(r.snapshot);
         void reply.send({
           views: result.rows.map((row) =>
-            serializeView(row, r.user.id, info.get(r.tableId), creator),
+            serializeView(row, r.user.id, info.get(r.tableId), rights),
           ),
         });
       } catch (err) {
@@ -186,8 +195,9 @@ export async function registerViewsRoutes(
           return;
         }
         const info = await loadTableConfigInfo(ctx.db, [r.tableId]);
-        const creator = await isBaseCreator(ctx.db, r.user.id, r.baseId);
-        void reply.send({ view: serializeView(row, r.user.id, info.get(r.tableId), creator) });
+        void reply.send({
+          view: serializeView(row, r.user.id, info.get(r.tableId), viewEditRights(r.snapshot)),
+        });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
@@ -203,6 +213,7 @@ export async function registerViewsRoutes(
         const r = await resolve(request, reply);
         if (!r) return;
         const { user, baseId, tableId, table } = r;
+        assertCanCreate(r.snapshot, body.visibility);
 
         const info = (await loadTableConfigInfo(ctx.db, [tableId])).get(tableId);
         const config = {
@@ -247,7 +258,7 @@ export async function registerViewsRoutes(
         );
 
         const row = await loadView(ctx.db, user.id, tableId, viewId);
-        void reply.code(201).send({ view: serializeView(row!, user.id, info, true) });
+        void reply.code(201).send({ view: serializeView(row!, user.id, info, viewEditRights(r.snapshot)) });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
@@ -273,6 +284,10 @@ export async function registerViewsRoutes(
         if (!canEditView(row, user.id, creator)) {
           lockedProblem(request, reply, row);
           return;
+        }
+        if (row.visibility !== "personal") assertCan(r.snapshot, "view.update");
+        if (body.visibility !== undefined && body.visibility !== "personal") {
+          assertCanCreate(r.snapshot, body.visibility);
         }
         // Locking/unlocking and making a view personal is limited to its creator / base creators.
         if (
@@ -331,7 +346,7 @@ export async function registerViewsRoutes(
 
         const updated = await loadView(ctx.db, user.id, tableId, viewId);
         const info = await loadTableConfigInfo(ctx.db, [tableId]);
-        void reply.send({ view: serializeView(updated!, user.id, info.get(tableId), creator) });
+        void reply.send({ view: serializeView(updated!, user.id, info.get(tableId), viewEditRights(r.snapshot)) });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
@@ -357,6 +372,7 @@ export async function registerViewsRoutes(
           lockedProblem(request, reply, row);
           return;
         }
+        if (row.visibility !== "personal") assertCan(r.snapshot, "view.update");
         const others = await sql<{ total: string; shared: string }>`
           SELECT count(*)::text AS total,
                  count(*) FILTER (WHERE visibility <> 'personal')::text AS shared
@@ -440,6 +456,7 @@ export async function registerViewsRoutes(
         }
         const newId = generateUuidV7();
         const visibility = row.visibility === "personal" ? "personal" : "collaborative";
+        assertCanCreate(r.snapshot, visibility);
         const name = body?.name ?? `${row.name} copy`.slice(0, 200);
 
         await withBaseTx(
@@ -489,7 +506,7 @@ export async function registerViewsRoutes(
         const info = await loadTableConfigInfo(ctx.db, [tableId]);
         void reply
           .code(201)
-          .send({ view: serializeView(created!, user.id, info.get(tableId), true) });
+          .send({ view: serializeView(created!, user.id, info.get(tableId), viewEditRights(r.snapshot)) });
       } catch (err) {
         handleRouteError(request, reply, err);
       }
@@ -506,6 +523,7 @@ export async function registerViewsRoutes(
         const r = await resolve(request, reply);
         if (!r) return;
         const { user, baseId, tableId, table } = r;
+        assertCan(r.snapshot, "view.update");
         const requested = body.viewIds.map((v) => parsePid(v, "viw"));
         if (new Set(requested).size !== requested.length) {
           throw new z.ZodError([

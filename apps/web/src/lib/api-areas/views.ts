@@ -170,6 +170,23 @@ export const viewsApi = {
       json: body,
     });
   },
+  /** Fire-and-forget PATCH that survives page unload (`keepalive`). */
+  patchOnUnload(
+    baseId: string,
+    tableId: string,
+    viewId: string,
+    body: { config: Partial<ViewConfig> },
+  ) {
+    const opId = newClientOpId();
+    rememberClientOp(opId);
+    void fetch(`${API_BASE}${tablePath(baseId, tableId)}/views/${viewId}`, {
+      method: "PATCH",
+      credentials: "include",
+      keepalive: true,
+      headers: { "Content-Type": "application/json", "X-Tabula-Client-Op-Id": opId },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  },
   remove(baseId: string, tableId: string, viewId: string) {
     return request<void>(`${tablePath(baseId, tableId)}/views/${viewId}`, {
       method: "DELETE",

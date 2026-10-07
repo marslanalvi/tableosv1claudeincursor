@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FilterAst, TableDto, ViewDto } from "../../lib/api.ts";
+import { ApiProblemError, type FilterAst, type TableDto, type ViewDto } from "../../lib/api.ts";
 import {
   viewConfigOf,
   viewRecordsApi,
@@ -61,6 +61,22 @@ export function useViewConfig(baseId: string, tableId: string, view: ViewDto | u
   useEffect(() => {
     return () => flush();
   }, [viewId, flush]);
+
+  // A pending debounced save must not be lost when the page is reloaded or closed.
+  useEffect(() => {
+    const onHide = () => {
+      const pending = pendingRef.current;
+      if (!pending) return;
+      pendingRef.current = null;
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      viewsApi.patchOnUnload(baseId, tableId, pending.viewId, { config: pending.patch });
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, [baseId, tableId]);
 
   const serverConfig = useMemo(() => viewConfigOf(view), [view]);
   const config: ViewConfig = useMemo(
@@ -126,6 +142,10 @@ export function useViewRecords(
       }),
     enabled: opts.enabled !== false,
     placeholderData: (prev) => prev,
+    // Ride out short API outages (5xx / network); 4xx won't succeed on retry.
+    retry: (failures, err) =>
+      !(err instanceof ApiProblemError && err.problem.status < 500) && failures < 5,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
   const records = useMemo(() => {
     const raw = query.data ?? [];

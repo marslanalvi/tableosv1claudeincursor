@@ -38,7 +38,12 @@ export function ViewsSidebar({
   views: ViewDto[];
   activeViewId: string | null;
   onSelectView: (viewId: string) => void;
-  onCreateView: (type: ViewKind, visibility: "personal" | "collaborative", name?: string) => void;
+  /** Return the create promise so a failure is shown in the sidebar. */
+  onCreateView: (
+    type: ViewKind,
+    visibility: "personal" | "collaborative",
+    name?: string,
+  ) => void | Promise<unknown>;
   /** Kept for compatibility; favorites are handled here. */
   onToggleFavorite?: (view: ViewDto) => void;
   onJumpToOriginal?: (view: ViewDto) => void;
@@ -222,9 +227,10 @@ export function ViewsSidebar({
 
   function submitCreate() {
     if (!draft) return;
-    onCreateView(draft.type, draft.visibility, draft.name.trim() || viewMeta(draft.type).label);
+    const pending = onCreateView(draft.type, draft.visibility, draft.name.trim() || viewMeta(draft.type).label);
     setDraft(null);
     setCreateOpen(false);
+    if (pending) pending.catch((err: unknown) => setError(errorText(err)));
   }
 
   /* ---------------- render ---------------- */
