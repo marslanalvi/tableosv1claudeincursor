@@ -11,6 +11,7 @@ import {
   parseIsoInstant,
   resolveDateOperand,
   resolveWithinRange,
+  sortKeysFor,
   SqlParams,
   type EvalField,
   type FilterAst,
@@ -139,6 +140,31 @@ describe("evaluator", () => {
     assert.equal(ev(c("fld_l", "contains", "app")), true);
     assert.equal(ev(c("fld_l", "hasAnyOf", ["rec_2"])), false);
   });
+  it("lookups use display text (select labels mapped from ids)", () => {
+    const lf: EvalField[] = [
+      { id: "fld_ls", type: "lookup", lookupTarget: { id: "t1", type: "single_select", config: { options: [{ id: "opt_z", label: "Zed" }] } } },
+      { id: "fld_lu", type: "lookup", lookupTarget: { id: "t2", type: "collaborator" } },
+      { id: "fld_la", type: "lookup", lookupTarget: { id: "t3", type: "attachment" } },
+      { id: "fld_ll", type: "lookup", lookupTarget: { id: "t4", type: "link" } },
+      { id: "fld_lx", type: "lookup" },
+    ];
+    const r = {
+      fields: {
+        fld_ls: ["opt_z", "opt_unknown"],
+        fld_lu: [{ id: "usr_1", name: "Zed Smith", email: "z@x" }],
+        fld_la: [{ id: "att_1", filename: "zed.png" }],
+        fld_ll: [{ id: "rec_1", name: "Zed Corp" }],
+        fld_lx: ["opt_z"],
+      },
+    };
+    const e = (ast: FilterAst) => evaluateFilter(ast, r, lf, ctx);
+    assert.equal(e(c("fld_ls", "contains", "zed")), true);
+    assert.equal(e(c("fld_ls", "eq", "zed, opt_unknown")), true);
+    assert.equal(e(c("fld_ls", "contains", "opt_z")), false);
+    for (const id of ["fld_lu", "fld_la", "fld_ll"]) assert.equal(e(c(id, "contains", "zed")), true, id);
+    assert.equal(e(c("fld_lu", "contains", "usr_1")), false);
+    assert.equal(e(c("fld_lx", "contains", "opt_z")), true, "no target: stored text");
+  });
   it("groups drop incomplete conditions", () => {
     assert.equal(ev({ kind: "or", children: [c("fld_n", "gt"), c("fld_n", "lt", 0)] }), false);
     assert.equal(ev({ kind: "and", children: [c("fld_n", "gt")] }), true);
@@ -188,6 +214,34 @@ describe("SQL compiler", () => {
     const r = compileFilterToSql(c("x", "eq", "Acme"), new Map([["x", 4]]));
     assert.match(r.sql, /r\.cells->'4'/);
     assert.deepEqual(r.params, ["acme"]);
+  });
+  it("lookups compare display text by target type", () => {
+    const sel = F("ts", 1, "single_select", { options: [{ id: "opt_z", label: "Zed" }] });
+    const usr = F("tu", 1, "collaborator");
+    const att = F("ta", 1, "attachment");
+    const lnk: SqlFieldInfo = { ...F("tl", 1, "link"), link: { relationId: "rel", side: "a", peerTableId: "peer", peerPrimary: F("pp", 1, "text") } };
+    const lk = (target: SqlFieldInfo): SqlFieldInfo => ({ ...F("lk", 9, "lookup", {}, true), lookupTarget: target });
+    const run = (target: SqlFieldInfo, op = "contains") =>
+      compileFilterToSql(c("lk", op, "zed"), undefined, { fields: new Map([["lk", lk(target)]]) });
+    const s = run(sel);
+    assert.ok(s.params.some((x) => Array.isArray(x) && x.includes("Zed")), "select labels passed");
+    assert.match(s.sql, /unnest/);
+    assert.match(run(usr).sql, /core\.users/);
+    assert.match(run(att).sql, /data\.attachments at/);
+    const l = run(lnk);
+    assert.match(l.sql, /data\.records lkr/);
+    assert.ok(l.params.includes("peer"));
+    assert.match(run(usr, "empty").sql, /EXISTS \(SELECT 1 FROM core\.users/);
+    const untargeted = compileFilterToSql(c("lk", "contains", "zed"), undefined, { fields: new Map([["lk", F("lk", 9, "lookup", {}, true)]]) });
+    assert.doesNotMatch(untargeted.sql, /core\.users|unnest/);
+  });
+  it("lookup sort keys use the first element", () => {
+    const lk = (target: SqlFieldInfo): SqlFieldInfo => ({ ...F("lk", 9, "lookup", {}, true), lookupTarget: target });
+    assert.equal(sortKeysFor(lk(F("n", 1, "number")), "r", new SqlParams())[0]?.type, "float8");
+    assert.equal(sortKeysFor(lk(F("s", 1, "single_select", { options: [{ id: "opt_a", label: "A" }] })), "r", new SqlParams())[0]?.type, "int4");
+    const u = sortKeysFor(lk(F("u", 1, "collaborator")), "r", new SqlParams())[0]!;
+    assert.equal(u.type, "text");
+    assert.match(u.expr, /LIMIT 1/);
   });
   it("search ORs display expressions", () => {
     const r = compileSearchToSql("Foo", [...new Set(sqlFields.values())]);

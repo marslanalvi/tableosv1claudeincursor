@@ -34,7 +34,13 @@ async function queryAll(body: Record<string, unknown>, pageSize = 500): Promise<
 before(async () => {
   fx = await createFixture(80, 7);
   all = await queryAll({});
-  evalFields = Object.values(fx.fields).map((f) => ({ id: f.id, type: f.type, config: f.config, aliases: [f.uuid] }));
+  evalFields = Object.values(fx.fields).map((f) => ({
+    id: f.id,
+    type: f.type,
+    config: f.config,
+    aliases: [f.uuid],
+    ...(f.lookupTarget ? { lookupTarget: f.lookupTarget } : {}),
+  }));
 });
 
 after(async () => {
@@ -102,7 +108,18 @@ function operandsFor(key: string, type: string, op: FilterOp): unknown[] {
       if (op === "contains" || op === "notContains") return ["app", "AN", "zzz"];
       return [[peer[0]], [peer[0], peer[1]], [peer[3]]];
     case "lookup":
-      return ["apple", "date", "an"];
+      switch (key) {
+        case "lstatus":
+          return ["zebra", "Mango", "opt_p1", "mango, zebra", "opt_gone"];
+        case "lowner":
+          return ["ada", "Bob Other", "bob other, ada tester", "usr_", "ws-a"];
+        case "lfiles":
+          return ["a.png", "PDF", "b.pdf, a.png"];
+        case "lmain":
+          return ["alpha", "Beta", "gamma ray", "0"];
+        default:
+          return ["apple", "date", "an"];
+      }
     case "formula":
       if (key === "fnum") return [3, 4.5, 8, -1];
       return op === "gt" || op === "gte" || op === "lt" || op === "lte" ? [7, 40] : ["hello", "world", "42", "true"];
@@ -192,6 +209,11 @@ describe("sorting + keyset pagination", () => {
     [["cby", "asc"], ["auto", "desc"]],
     [["auto", "desc"]],
     [["name", "asc"], ["num", "desc"], ["day", "asc"]],
+    [["look", "asc"]],
+    [["lstatus", "asc"]],
+    [["lowner", "desc"]],
+    [["lfiles", "asc"]],
+    [["lmain", "asc"], ["num", "desc"]],
   ];
   for (const sc of sortCases) {
     it(`pages through ${sc.map(([k, d]) => `${k} ${d}`).join(", ")} without gaps or duplicates`, async () => {
@@ -240,20 +262,14 @@ describe("search / projection / count / views / single record", () => {
     const stId = fx.fields["status"]!.id;
     const notesId = fx.fields["notes"]!.id;
     const nameId = fx.fields["name"]!.id;
-    for (const r of res.body.records) {
-      const hit =
-        r.fields[stId] === "opt_c" ||
-        String(r.fields[notesId] ?? "").toLowerCase().includes("gamma") ||
-        String(r.fields[nameId] ?? "").toLowerCase().includes("gamma");
-      assert.ok(hit, JSON.stringify(r.fields));
-    }
-    const expected = all.filter(
-      (r) =>
-        r.fields[stId] === "opt_c" ||
-        String(r.fields[notesId] ?? "").toLowerCase().includes("gamma") ||
-        String(r.fields[nameId] ?? "").toLowerCase().includes("gamma"),
-    );
-    assert.equal(res.body.records.length, expected.length);
+    const lmainId = fx.fields["lmain"]!.id;
+    const hit = (r: any) =>
+      r.fields[stId] === "opt_c" ||
+      String(r.fields[notesId] ?? "").toLowerCase().includes("gamma") ||
+      String(r.fields[nameId] ?? "").toLowerCase().includes("gamma") ||
+      (r.fields[lmainId] ?? []).some((l: any) => l.name.toLowerCase().includes("gamma"));
+    for (const r of res.body.records) assert.ok(hit(r), JSON.stringify(r.fields));
+    assert.equal(res.body.records.length, all.filter(hit).length);
   });
 
   it("projection, totalCount and pagination metadata", async () => {
@@ -337,6 +353,76 @@ describe("search / projection / count / views / single record", () => {
       }
     }
     assert.ok(all.some((r) => r.errors), "some formula errors surfaced");
+  });
+});
+
+describe("lookups use the target's display text", () => {
+  const ids = (res: any) => res.body.records.map((r: any) => r.id).sort();
+  const cond = (k: string, op: string, value?: unknown) => ({ kind: "condition", fieldId: fx.fields[k]!.id, op, ...(value !== undefined ? { value } : {}) });
+
+  it("filters by label / name / filename, not stored ids", async () => {
+    const cases: [string, string, (v: any[]) => boolean][] = [
+      ["lstatus", "zebra", (v) => v.includes("opt_p1")],
+      ["lowner", "bob", (v) => v.some((u) => u.name === "Bob Other")],
+      ["lfiles", "pdf", (v) => v.some((a) => a.filename === "b.pdf")],
+      ["lmain", "gamma", (v) => v.some((l) => l.name.toLowerCase().includes("gamma"))],
+    ];
+    for (const [k, text, has] of cases) {
+      const fid = fx.fields[k]!.id;
+      const res = await q({ filter: cond(k, "contains", text), pageSize: 500 });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      const expect = all.filter((r) => has(r.fields[fid] ?? [])).map((r) => r.id).sort();
+      assert.ok(expect.length > 0, `${k} fixture has matches`);
+      assert.deepEqual(ids(res), expect, k);
+    }
+    // stored ids never match text ops
+    for (const [k, raw] of [["lstatus", "opt_p"], ["lowner", fx.userUuid.slice(0, 8)], ["lmain", fx.recordUuids[0]!.slice(0, 8)]] as const) {
+      const res = await q({ filter: cond(k, "contains", raw), pageSize: 500 });
+      assert.equal(res.body.records.length, 0, `${k} contains ${raw}`);
+    }
+  });
+
+  it("dangling ids are empty, like the serialized value", async () => {
+    for (const k of ["lowner", "lfiles", "lmain"]) {
+      const fid = fx.fields[k]!.id;
+      const res = await q({ filter: cond(k, "empty"), pageSize: 500 });
+      assert.deepEqual(ids(res), all.filter((r) => !(fid in r.fields)).map((r) => r.id).sort(), k);
+    }
+  });
+
+  it("search matches lookup display text", async () => {
+    const res = await q({ search: "MANGO", pageSize: 500 });
+    const fid = fx.fields["lstatus"]!.id;
+    assert.deepEqual(ids(res), all.filter((r) => (r.fields[fid] ?? []).includes("opt_p2")).map((r) => r.id).sort());
+  });
+
+  it("sorts lookups and collaborators by display text / option order", async () => {
+    for (const k of ["owner", "lowner"]) {
+      const fid = fx.fields[k]!.id;
+      for (const dir of ["asc", "desc"] as const) {
+        const rows = await queryAll({ sort: [{ field: fid, direction: dir }] });
+        const names = rows.map((r) => r.fields[fid]?.[0]?.name?.toLowerCase() ?? null);
+        const filled = names.filter((n): n is string => n !== null);
+        const sorted = [...filled].sort();
+        assert.deepEqual(filled, dir === "asc" ? sorted : sorted.reverse(), `${k} ${dir}`);
+        assert.ok(names.slice(filled.length).every((n) => n === null), `${k} ${dir} empties last`);
+        assert.ok(new Set(filled).size > 1, `${k} has distinct names`);
+      }
+    }
+    const sid = fx.fields["lstatus"]!.id;
+    const rows = await queryAll({ sort: [{ field: sid, direction: "asc" }] });
+    const pos = rows.map((r) => ["opt_p1", "opt_p2"].indexOf(r.fields[sid]?.[0])).filter((x) => x >= 0);
+    assert.deepEqual(pos, [...pos].sort((a, b) => a - b));
+  });
+
+  it("groups lookups by display text", async () => {
+    const res = await fx.api("POST", `/v1/bases/${fx.baseId}/tables/${fx.tableId}/records/group`, {
+      groupBy: [{ fieldId: fx.fields["lowner"]!.id }],
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const values = res.body.groups.map((g: any) => g.value);
+    assert.ok(values.includes("Ada Tester") && values.includes("Bob Other, Ada Tester"), JSON.stringify(values));
+    assert.equal(res.body.groups.reduce((s: number, g: any) => s + g.count, 0), all.length);
   });
 });
 

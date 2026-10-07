@@ -4,6 +4,7 @@ export {
   createFilterPredicate,
   isEmptyFor,
   textOf,
+  lookupTextOf,
   numOf,
   parseIsoInstant,
   andGroup,

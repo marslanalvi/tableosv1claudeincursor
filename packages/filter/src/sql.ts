@@ -9,6 +9,7 @@ import {
   emptyExpr,
   kindOf,
   linkPeersSql,
+  lookupTextExpr,
   metaColumn,
   numExpr,
   selectIdExpr,
@@ -131,7 +132,7 @@ function compilePrepared(f: SqlFieldInfo, pr: Prepared, a: string, p: SqlParams)
       if (pr.numericText) return numCmp(numExpr(f, a), pr, p);
       return textCmp(textExpr(f, a), pr, p);
     case "array":
-      return textCmp(textExpr(f, a), pr, p);
+      return textCmp(lookupTextExpr(f, a, p), pr, p);
     case "number":
       return numCmp(numExpr(f, a), pr, p);
     case "date":

@@ -29,11 +29,42 @@ function toInfo(f: { id: string; slot: number; type: string; config: Record<stri
   return { id: f.id, slot: f.slot, type: f.type, config: f.config ?? {}, isComputed: f.is_computed };
 }
 
-/** Field metadata for SQL compilation: link relations and peer primary fields resolved. */
+function lookupTargetId(f: SqlFieldInfo): string | null {
+  if (f.type !== "lookup") return null;
+  const raw = f.config["targetFieldId"] ?? f.config["lookupFieldId"];
+  if (typeof raw !== "string") return null;
+  if (UUID_RE.test(raw)) return raw.toLowerCase();
+  if (!raw.startsWith("fld_")) return null;
+  try {
+    return decodePublicId(raw).uuid;
+  } catch {
+    return null;
+  }
+}
+
+/** Field metadata for SQL compilation: link relations, peer primary fields and lookup targets resolved. */
 export async function loadSqlFieldInfos(db: TabulaDb, fields: QueryFieldRow[]): Promise<SqlFieldInfo[]> {
   const infos = fields.map(toInfo);
-  const linkIds = fields.filter((f) => f.type === "link" || f.type === "contact").map((f) => f.id);
-  if (linkIds.length === 0) return infos;
+  const targetIds = [...new Set(infos.map(lookupTargetId).filter((x): x is string => !!x))];
+  const targets = targetIds.length
+    ? (
+        await sql<{ id: string; slot: number; type: string; config: Record<string, unknown>; is_computed: boolean }>`
+          SELECT id, slot, type, config, is_computed FROM data.fields WHERE id = ANY(${targetIds}::uuid[])
+        `.execute(db)
+      ).rows.map(toInfo)
+    : [];
+  await attachLinkInfo(db, [...infos, ...targets]);
+  const targetById = new Map(targets.map((t) => [t.id, t]));
+  for (const info of infos) {
+    const tid = lookupTargetId(info);
+    if (tid) info.lookupTarget = targetById.get(tid) ?? null;
+  }
+  return infos;
+}
+
+async function attachLinkInfo(db: TabulaDb, infos: SqlFieldInfo[]): Promise<void> {
+  const linkIds = infos.filter((f) => f.type === "link" || f.type === "contact").map((f) => f.id);
+  if (linkIds.length === 0) return;
   const rels = await sql<{ id: string; a_field_id: string; b_field_id: string | null; a_table_id: string; b_table_id: string }>`
     SELECT id, a_field_id, b_field_id, a_table_id, b_table_id
     FROM data.link_relations
@@ -57,7 +88,6 @@ export async function loadSqlFieldInfos(db: TabulaDb, fields: QueryFieldRow[]): 
     const peerTableId = side === "a" ? rel.b_table_id : rel.a_table_id;
     info.link = { relationId: rel.id, side, peerTableId, peerPrimary: primByTable.get(peerTableId) ?? null };
   }
-  return infos;
 }
 
 /** Map keyed by uuid and `fld_` id. */

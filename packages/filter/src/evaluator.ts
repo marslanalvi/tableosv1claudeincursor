@@ -1,7 +1,7 @@
 import { FilterError, type FilterAndGroup, type FilterAst, type FilterNode, type FilterOrGroup } from "./ast.js";
 import { dateInTimeZone } from "./dates.js";
-import { filterKindForField } from "./kinds.js";
-import { prepareCondition, type FieldLike, type PrepareContext, type Prepared } from "./prepare.js";
+import { filterKindForField, normalizeFieldType } from "./kinds.js";
+import { prepareCondition, selectOptionsOf, type FieldLike, type PrepareContext, type Prepared } from "./prepare.js";
 import { parseFilterAst } from "./parse.js";
 
 /**
@@ -13,6 +13,8 @@ import { parseFilterAst } from "./parse.js";
 export interface EvalField extends FieldLike {
   /** Other ids that refer to this field (e.g. raw uuid). */
   aliases?: string[] | undefined;
+  /** Lookup fields: the looked-up field, so select option ids show as labels. */
+  lookupTarget?: FieldLike | null | undefined;
 }
 
 export interface EvalRecord {
@@ -49,6 +51,15 @@ export function textOf(v: unknown): string | null {
     return parts.length ? parts.join(", ") : null;
   }
   return elemText(v);
+}
+
+/** Display text of a wire lookup value (mirrors SQL `lookupTextExpr`). */
+export function lookupTextOf(field: EvalField, v: unknown): string | null {
+  const t = field.lookupTarget;
+  const tk = t && normalizeFieldType(field.type) === "lookup" ? filterKindForField(t.type, t.config ?? null) : null;
+  if (tk !== "single_select" && tk !== "multi_select") return textOf(v);
+  const labels = new Map(selectOptionsOf(t?.config).map((o) => [o.id, o.label]));
+  return textOf(asArr(v).map((x) => (typeof x === "string" ? labels.get(x) ?? x : x)));
 }
 
 export function numOf(v: unknown): number | null {
@@ -201,14 +212,14 @@ function setTest(elems: string[], pr: Prepared): boolean {
   }
 }
 
-function evalPrepared(field: FieldLike, pr: Prepared, v: unknown): boolean {
+function evalPrepared(field: EvalField, pr: Prepared, v: unknown): boolean {
   if (pr.op === "empty") return isEmptyFor(field, v);
   if (pr.op === "notEmpty") return !isEmptyFor(field, v);
   switch (pr.kind) {
     case "text":
       return pr.numericText ? numTest(numOf(v), pr) : textTest(textOf(v), pr);
     case "array":
-      return textTest(textOf(v), pr);
+      return textTest(lookupTextOf(field, v), pr);
     case "number":
       return numTest(numOf(v), pr);
     case "date":

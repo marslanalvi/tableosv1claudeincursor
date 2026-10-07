@@ -25,6 +25,11 @@ export interface SqlFieldInfo {
   config: Record<string, unknown>;
   isComputed: boolean;
   link?: SqlLinkInfo | null | undefined;
+  /**
+   * Lookup fields: the looked-up field (with `link` info when it is a link
+   * field). Stored lookup elements are mapped to display text by its type.
+   */
+  lookupTarget?: SqlFieldInfo | null | undefined;
 }
 
 export type SqlKeyType = "text" | "float8" | "int8" | "int4" | "bool" | "timestamptz";
@@ -175,6 +180,78 @@ function userNameSql(idText: string): string {
   return `(SELECT COALESCE(NULLIF(u.display_name, ''), u.email) FROM core.users u WHERE ${idText} ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND u.id = (${idText})::uuid)`;
 }
 
+const UUID_TEXT_RE = `'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`;
+
+/** Kind of a lookup's target field, or null when the field is not a resolved lookup. */
+export function lookupTargetKind(f: SqlFieldInfo): FilterKind | null {
+  if (normalizeFieldType(f.type) !== "lookup" || !f.lookupTarget) return null;
+  return kindOf(f.lookupTarget);
+}
+
+/** Text of one stored lookup element (jsonb), as the serializer shows it; NULL when it hydrates to nothing. */
+function lookupElemText(f: SqlFieldInfo, ev: string, p: SqlParams): string {
+  const t = f.lookupTarget;
+  const plain = `(CASE jsonb_typeof(${ev}) WHEN 'object' THEN COALESCE(${ev}->>'name', ${ev}->>'text', ${ev}->>'filename') WHEN 'null' THEN NULL WHEN 'array' THEN NULL ELSE ${ev}#>>'{}' END)`;
+  if (!t) return plain;
+  const key = `(CASE jsonb_typeof(${ev}) WHEN 'string' THEN ${ev}#>>'{}' END)`;
+  const uuidKey = `(CASE WHEN ${key} ~* ${UUID_TEXT_RE} THEN (${key})::uuid END)`;
+  switch (kindOf(t)) {
+    case "single_select":
+    case "multi_select": {
+      const opts = selectOptionsOf(t.config);
+      const ids = p.add(opts.map((o) => o.id), "text[]");
+      const labels = p.add(opts.map((o) => o.label), "text[]");
+      return `COALESCE((SELECT o.l FROM unnest(${ids}, ${labels}) AS o(i, l) WHERE o.i = ${key} LIMIT 1), ${plain})`;
+    }
+    case "collaborator":
+      return `(SELECT COALESCE(NULLIF(u.display_name, ''), u.email) FROM core.users u WHERE u.id = ${uuidKey})`;
+    case "attachment":
+      return `(SELECT at.filename FROM data.attachments at WHERE at.id = ${uuidKey})`;
+    case "link": {
+      const prim = t.link?.peerPrimary;
+      if (!t.link || !prim) return "NULL::text";
+      return `(SELECT ${displayExpr(prim, "lkr", p, 1)} FROM data.records lkr WHERE lkr.table_id = ${p.add(t.link.peerTableId, "uuid")} AND lkr.id = ${uuidKey} AND lkr.deleted_at IS NULL)`;
+    }
+    default:
+      return plain;
+  }
+}
+
+/** True when a stored lookup element hydrates to a wire value (collaborator/attachment/link targets drop dangling ids). */
+function lookupElemPresent(f: SqlFieldInfo, ev: string, p: SqlParams): string {
+  const t = f.lookupTarget;
+  const key = `(CASE jsonb_typeof(${ev}) WHEN 'string' THEN ${ev}#>>'{}' END)`;
+  const uuidKey = `(CASE WHEN ${key} ~* ${UUID_TEXT_RE} THEN (${key})::uuid END)`;
+  switch (t ? kindOf(t) : null) {
+    case "collaborator":
+      return `EXISTS (SELECT 1 FROM core.users u WHERE u.id = ${uuidKey})`;
+    case "attachment":
+      return `EXISTS (SELECT 1 FROM data.attachments at WHERE at.id = ${uuidKey})`;
+    case "link":
+      return t?.link
+        ? `EXISTS (SELECT 1 FROM data.records lkr WHERE lkr.table_id = ${p.add(t.link.peerTableId, "uuid")} AND lkr.id = ${uuidKey} AND lkr.deleted_at IS NULL)`
+        : "FALSE";
+    default:
+      return `(jsonb_typeof(${ev}) <> 'null' AND COALESCE(${ev}#>>'{}', '') <> '')`;
+  }
+}
+
+/** Elements of a lookup value with their display text `(t, o)` (empty texts excluded). */
+function lookupElemsSql(f: SqlFieldInfo, a: string, p: SqlParams): string {
+  return `(SELECT x.t, x.o FROM (SELECT e.o, ${lookupElemText(f, "e.v", p)} AS t FROM jsonb_array_elements(${arrayExpr(jsonExpr(f, a))}) WITH ORDINALITY AS e(v, o)) x WHERE x.t IS NOT NULL AND x.t <> '')`;
+}
+
+/**
+ * Display text of a lookup: each element mapped by the target type (select id →
+ * label, user uuid → name, record uuid → linked primary display, attachment
+ * uuid → filename), joined with ", ". Falls back to the stored text when the
+ * target is unknown.
+ */
+export function lookupTextExpr(f: SqlFieldInfo, a: string, p: SqlParams): string {
+  if (lookupTargetKind(f) === null) return textExpr(f, a);
+  return `(SELECT NULLIF(string_agg(le.t, ', ' ORDER BY le.o), '') FROM ${lookupElemsSql(f, a, p)} le)`;
+}
+
 /**
  * Display text (what a user sees): select labels, collaborator names, linked
  * record names. Used for search, link-name filters and text sorts.
@@ -208,6 +285,8 @@ export function displayExpr(f: SqlFieldInfo, a: string, p: SqlParams, depth = 0)
       return "NULL";
     case "attachment":
       return textOfJson(jsonExpr(f, a));
+    case "array":
+      return lookupTextExpr(f, a, p);
     default:
       return textExpr(f, a);
   }
@@ -227,10 +306,16 @@ export function emptyExpr(f: SqlFieldInfo, a: string, p: SqlParams): string {
       return `(NOT ${boolExpr(f, a)})`;
     case "single_select":
       return `(${selectIdExpr(f, a)} IS NULL)`;
+    case "array": {
+      const lk = lookupTargetKind(f);
+      if (lk === "collaborator" || lk === "attachment" || lk === "link") {
+        return `(NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${arrayExpr(jsonExpr(f, a))}) AS e(v) WHERE ${lookupElemPresent(f, "e.v", p)}))`;
+      }
+      return `(NOT EXISTS (SELECT 1 FROM ${elemIdsSql(f, a)} s WHERE s.id IS NOT NULL AND s.id <> ''))`;
+    }
     case "multi_select":
     case "collaborator":
     case "attachment":
-    case "array":
       return `(NOT EXISTS (SELECT 1 FROM ${elemIdsSql(f, a)} s WHERE s.id IS NOT NULL AND s.id <> ''))`;
     case "user": {
       const m = metaColumn(f, a);
@@ -300,6 +385,20 @@ export function sortKeysFor(f: SqlFieldInfo, a: string, p: SqlParams): SortKeySq
           type: "int4",
         },
       ];
+    case "array": {
+      const lk = lookupTargetKind(f);
+      if (lk === null) return [{ expr: `NULLIF(lower(${textExpr(f, a)}), '')`, type: "text" }];
+      const elems = `jsonb_array_elements(${arrayExpr(jsonExpr(f, a))}) WITH ORDINALITY AS e(v, o)`;
+      if (lk === "number") {
+        return [{ expr: `(SELECT ${numOfJson("e.v")} FROM ${elems} WHERE ${numOfJson("e.v")} IS NOT NULL ORDER BY e.o LIMIT 1)`, type: "float8" }];
+      }
+      if (lk === "single_select" || lk === "multi_select") {
+        const opts = selectOptionsOf(f.lookupTarget?.config);
+        const ids = p.add(opts.map((o) => o.id), "text[]");
+        return [{ expr: `(SELECT array_position(${ids}, e.v#>>'{}') FROM ${elems} WHERE jsonb_typeof(e.v) = 'string' AND e.v#>>'{}' <> '' ORDER BY e.o LIMIT 1)`, type: "int4" }];
+      }
+      return [{ expr: `(SELECT lower(le.t) FROM ${lookupElemsSql(f, a, p)} le ORDER BY le.o LIMIT 1)`, type: "text" }];
+    }
     default: {
       const keys: SortKeySql[] = [];
       if (isUntypedFormula(f.type, f.config)) keys.push({ expr: numExpr(f, a), type: "float8" });
@@ -355,6 +454,8 @@ export function groupKeyFor(f: SqlFieldInfo, a: string, p: SqlParams): { key: st
         sort,
       };
     }
+    case "array":
+      return { key: `to_jsonb(NULLIF(${lookupTextExpr(f, a, p)}, ''))`, sort };
     default:
       return { key: `to_jsonb(NULLIF(${textExpr(f, a)}, ''))`, sort };
   }

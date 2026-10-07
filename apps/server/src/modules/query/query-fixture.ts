@@ -74,7 +74,17 @@ export interface Fixture {
   userId: string; // usr_
   userUuid: string;
   otherUserUuid: string;
-  fields: Record<string, { id: string; uuid: string; slot: number; type: string; config: Record<string, unknown> }>;
+  fields: Record<
+    string,
+    {
+      id: string;
+      uuid: string;
+      slot: number;
+      type: string;
+      config: Record<string, unknown>;
+      lookupTarget?: { id: string; type: string; config: Record<string, unknown> };
+    }
+  >;
   recordUuids: string[];
   peerRecordUuids: string[];
 }
@@ -88,6 +98,11 @@ export const TAGS = [
   { id: "opt_x", label: "X-ray", color: "blue" },
   { id: "opt_y", label: "Yankee", color: "red" },
   { id: "opt_z", label: "Zulu", color: "green" },
+];
+/** Options of the peer table's select (looked up from the main table). */
+export const PEER_OPTS = [
+  { id: "opt_p1", label: "Zebra", color: "blue" },
+  { id: "opt_p2", label: "Mango", color: "red" },
 ];
 
 export const FIELD_SPECS: FieldSpec[] = [
@@ -115,6 +130,17 @@ export const FIELD_SPECS: FieldSpec[] = [
   { key: "mby", name: "MBy", type: "modified_by" },
   { key: "link", name: "Link", type: "link" },
   { key: "look", name: "Look", type: "lookup", computed: true },
+  { key: "lstatus", name: "LStatus", type: "lookup", computed: true },
+  { key: "lowner", name: "LOwner", type: "lookup", computed: true },
+  { key: "lfiles", name: "LFiles", type: "lookup", computed: true },
+  { key: "lmain", name: "LMain", type: "lookup", computed: true },
+];
+
+/** Fields on the peer table that the l* lookups above target. */
+const PEER_FIELD_SPECS: { key: string; name: string; type: string; config: Record<string, unknown> }[] = [
+  { key: "lstatus", name: "PStatus", type: "single_select", config: { options: PEER_OPTS } },
+  { key: "lowner", name: "POwner", type: "collaborator", config: { allowMultiple: true } },
+  { key: "lfiles", name: "PFiles", type: "attachment", config: {} },
 ];
 
 /** Deterministic PRNG. */
@@ -178,16 +204,23 @@ export async function createFixture(nRecords = 60, seed = 42): Promise<Fixture> 
   let slot = maxSlot + 1;
   const linkFieldUuid = generateUuidV7();
   const inverseUuid = generateUuidV7();
+  const peerFieldUuids = new Map(PEER_FIELD_SPECS.map((s) => [s.key, generateUuidV7()]));
+  const lookupTargets: Record<string, { id: string; type: string; config: Record<string, unknown> }> = {
+    look: { id: peerPrim.id, type: "text", config: {} },
+    lmain: { id: inverseUuid, type: "link", config: {} },
+  };
+  for (const s of PEER_FIELD_SPECS) lookupTargets[s.key] = { id: peerFieldUuids.get(s.key)!, type: s.type, config: s.config };
   for (const spec of FIELD_SPECS) {
     const id = spec.key === "link" ? linkFieldUuid : generateUuidV7();
     let config = spec.config ?? {};
-    if (spec.key === "look") config = { linkFieldId: linkFieldUuid, targetFieldId: peerPrim.id };
+    const target = lookupTargets[spec.key];
+    if (target) config = { linkFieldId: linkFieldUuid, targetFieldId: target.id };
     await pool.query(
       `INSERT INTO data.fields (id, workspace_id, base_id, table_id, slot, name, type, config, order_key, is_computed)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [id, ws, baseUuid, tableUuid, slot, spec.name, spec.type, JSON.stringify(config), `b${String(slot).padStart(4, "0")}`, !!spec.computed],
     );
-    fields[spec.key] = { id: pidOf("fld", id), uuid: id, slot, type: spec.type, config };
+    fields[spec.key] = { id: pidOf("fld", id), uuid: id, slot, type: spec.type, config, ...(target ? { lookupTarget: target } : {}) };
     slot++;
   }
   await pool.query(`UPDATE data.tables SET next_field_slot = $2 WHERE id = $1`, [tableUuid, slot]);
@@ -198,7 +231,16 @@ export async function createFixture(nRecords = 60, seed = 42): Promise<Fixture> 
      VALUES ($1, $2, $3, $4, $5, 'Main', 'link', '{}', 'b9999', false)`,
     [inverseUuid, ws, baseUuid, peerUuid, peerSlot],
   );
-  await pool.query(`UPDATE data.tables SET next_field_slot = $2 WHERE id = $1`, [peerUuid, peerSlot + 1]);
+  let nextPeerSlot = peerSlot + 1;
+  for (const s of PEER_FIELD_SPECS) {
+    await pool.query(
+      `INSERT INTO data.fields (id, workspace_id, base_id, table_id, slot, name, type, config, order_key, is_computed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)`,
+      [peerFieldUuids.get(s.key), ws, baseUuid, peerUuid, nextPeerSlot, s.name, s.type, JSON.stringify(s.config), `c${String(nextPeerSlot).padStart(4, "0")}`],
+    );
+    nextPeerSlot++;
+  }
+  await pool.query(`UPDATE data.tables SET next_field_slot = $2 WHERE id = $1`, [peerUuid, nextPeerSlot]);
   const relId = generateUuidV7();
   await pool.query(
     `INSERT INTO data.link_relations (id, workspace_id, base_id, a_table_id, a_field_id, b_table_id, b_field_id)
@@ -237,6 +279,7 @@ export async function createFixture(nRecords = 60, seed = 42): Promise<Fixture> 
   const maybe = <T>(v: T, p = 0.75): T | undefined => (r() < p ? v : undefined);
   const words = ["alpha", "Beta", "gamma ray", "Delta", "eps", "Alpha beta", "zeta", "", "  spaced  "];
   const recordUuids: string[] = [];
+  const ghostUuid = generateUuidV7();
   const today = new Date();
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const dayOffset = (n: number) => iso(new Date(today.getTime() + n * 86400000));
@@ -276,6 +319,15 @@ export async function createFixture(nRecords = 60, seed = 42): Promise<Fixture> 
     const ftext = pick<unknown>(["hello", "World", 42, 7, true, undefined]);
     if (ftext !== undefined) computed[String(fields["ftext"]!.slot)] = ftext;
     if (r() < 0.1) computed["_errors"] = { [String(fields["fnum"]!.slot)]: "#ERROR! division by zero" };
+    // Lookups store the target's stored values: option ids, user / attachment / record uuids (some dangling).
+    const lset = (k: string, v: unknown) => {
+      if (v !== undefined) computed[String(fields[k]!.slot)] = v;
+    };
+    const earlier = () => recordUuids[Math.floor(r() * recordUuids.length)]!;
+    lset("lstatus", maybe(pick<unknown>([["opt_p1"], ["opt_p2", "opt_p1"], ["opt_p2"], ["opt_gone"]])));
+    lset("lowner", maybe(pick<unknown>([[userUuid], [otherUserUuid, userUuid], [ghostUuid], [ghostUuid, otherUserUuid]])));
+    lset("lfiles", maybe(pick<unknown>([[attUuids[0]], [attUuids[1], attUuids[0]], [ghostUuid]])));
+    lset("lmain", maybe(pick<unknown>([[earlier()], [earlier(), earlier()], [ghostUuid], [ghostUuid, earlier()]])));
     const creator = r() < 0.7 ? userUuid : otherUserUuid;
     const updater = r() < 0.5 ? null : r() < 0.5 ? userUuid : otherUserUuid;
     await pool.query(

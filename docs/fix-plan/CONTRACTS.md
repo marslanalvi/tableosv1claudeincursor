@@ -305,3 +305,15 @@ Interfaces (Airtable "Interfaces" designer) are **out of scope for this pass**; 
   - **C**: `FieldManager` only closes on Escape when focus is inside the panel. Clicking Done works.
   - **G**: a newly created automation also fires for `record.created` events written before the automation existed. Its runs then fail with "The triggering record no longer exists" when those records are gone.
   - **E**: the search indexer stores record titles as "Record N", not the primary field value.
+
+### 2026-10-07 — A (follow-up): lookups filter, search, sort and group by display text
+- Closes B's "open gaps" note above. `SqlFieldInfo` has an optional `lookupTarget: SqlFieldInfo | null` (the looked-up field, with `link` info when it is a link field). The server's `loadSqlFieldInfos` resolves it from `config.targetFieldId` (raw uuid or `fld_`; legacy `lookupFieldId` accepted), so every caller of `executeRecordQuery` / the group query gets it.
+- Each stored lookup element maps to the text the serializer shows. Select option id ? option label (unknown ids stay as the raw id). User uuid ? `display_name`, falling back to email. Record uuid ? the linked record's primary display (live records only). Attachment uuid ? filename. Other targets keep their stored text.
+- **Filters and search:** text ops (`contains`, `notContains`, `eq`, `neq`) and search on a lookup compare the elements' display texts joined with `", "`. Stored ids never match.
+- **Empty checks:** `empty`/`notEmpty` on a lookup of a collaborator, attachment or link ignore dangling ids (user, attachment or record no longer exists), matching the serialized value that drops them.
+- **Sort:** a lookup sorts by its first element. Number targets sort numerically, select targets by option order, all others by lower-cased display text of the first non-empty element. Empties go last.
+- **Group:** a lookup groups by its joined display text. The group `value` is that string, e.g. `"Bob Other, Ada Tester"`.
+- Lookups with no resolvable target behave as before (stored text).
+- **`evaluateFilter`:** `EvalField` has an optional `lookupTarget: {id, type, config}`. When it's given and the target is a single/multi select, wire `opt_` ids map to labels for text ops. Collaborator/attachment/link lookup values are already hydrated objects on the wire, so their `name`/`filename` is used either way. New export: `lookupTextOf(field, value)`.
+- **For G:** `apps/server/src/modules/automations/filter-eval.ts` builds `EvalField`s without `lookupTarget`, so automation conditions on a lookup of a select still compare option ids. To fix, pass `lookupTarget: {id, type, config}` of the target field.
+- Plain collaborator sort orders by user name (verified with two named users, asc and desc).
