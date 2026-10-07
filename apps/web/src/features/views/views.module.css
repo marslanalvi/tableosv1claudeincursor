@@ -1118,17 +1118,23 @@ textarea.input {
 
 .calGrid {
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  grid-auto-rows: minmax(110px, 1fr);
+  display: flex;
+  flex-direction: column;
   border-left: 1px solid var(--hairline);
   border-top: 1px solid var(--hairline);
   overflow: auto;
   min-height: 0;
 }
 
-.calGridWeek {
-  grid-auto-rows: minmax(420px, 1fr);
+.calWeek {
+  flex: 1 0 auto;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-height: 110px;
+}
+
+.calGridWeek .calWeek {
+  min-height: 420px;
 }
 
 .calDay {
@@ -1204,19 +1210,46 @@ textarea.input {
   color: var(--ink);
 }
 
-.calEvents {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.calBar {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  height: 21px;
+  margin: 0 5px;
   min-width: 0;
-}
-
-.calEvent {
-  border: 0;
+  display: flex;
   border-radius: 6px;
-  padding: 3px 6px;
   background: #cfdfff;
   color: #102046;
+}
+
+.calBarContL {
+  margin-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.calBarContR {
+  margin-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.calBarResizing {
+  box-shadow: 0 0 0 2px var(--info);
+}
+
+.calBusy .calBar {
+  pointer-events: none;
+}
+
+.calBarBtn {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0 7px;
+  background: transparent;
+  color: inherit;
   font: inherit;
   font-size: 12px;
   text-align: left;
@@ -1224,10 +1257,22 @@ textarea.input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  border-radius: inherit;
 }
 
-.calEventRange {
-  border-left: 3px solid var(--info);
+.calBarHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  border-radius: 0 6px 6px 0;
+  touch-action: none;
+}
+
+.calBar:hover .calBarHandle {
+  background: rgba(16, 32, 70, 0.18);
 }
 
 /* List */
