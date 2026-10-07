@@ -562,6 +562,15 @@
   pointer-events: none;
 }
 
+/* Rows the server has but the grid hasn't loaded yet: empty row lines until the page arrives. */
+.pendingRows {
+  position: absolute;
+  left: 0;
+  background-color: var(--canvas);
+  background-image: linear-gradient(to bottom, transparent calc(100% - 1px), var(--hairline) calc(100% - 1px));
+  background-repeat: repeat-y;
+}
+
 .loadingMore {
   position: absolute;
   left: 50%;

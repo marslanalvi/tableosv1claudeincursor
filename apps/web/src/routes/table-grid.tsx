@@ -8,7 +8,6 @@ import {
   useState,
   type ComponentType,
 } from "react";
-import { DomGrid } from "../features/grid/DomGrid.tsx";
 import { CalendarView } from "../features/views/CalendarView.tsx";
 import { FormView } from "../features/views/FormView.tsx";
 import { GalleryView } from "../features/views/GalleryView.tsx";
@@ -18,8 +17,8 @@ import { TimelineView } from "../features/views/TimelineView.tsx";
 import { ViewToolbar } from "../features/views/ViewToolbar.tsx";
 import type { ViewKind } from "../features/views/view-types.ts";
 import { useViewConfig, type ViewComponentProps } from "../features/views/view-hooks.ts";
-import { cleanFilter, visibleFields } from "../features/views/view-utils.ts";
-import { RecordExpandDrawer } from "../features/record/RecordExpandDrawer.tsx";
+import { cleanFilter } from "../features/views/view-utils.ts";
+import { useBaseRole } from "../features/grid/field-services.tsx";
 import { AddFieldDialog } from "../features/schema/AddFieldDialog.tsx";
 import { api, type FilterAst, type TableDto, type ViewDto } from "../lib/api.ts";
 import type { ViewConfig } from "../lib/api-areas/views.ts";
@@ -47,6 +46,7 @@ interface GridViewProps {
   color: ViewConfig["color"];
   summary: ViewConfig["summary"];
   canEdit: boolean;
+  canEditRecords?: boolean;
   onConfigChange(patch: Partial<ViewConfig>): void;
   onOpenRecord(recordId: string): void;
 }
@@ -57,6 +57,8 @@ interface RecordDrawerProps {
   recordId: string;
   onClose: () => void;
   onNavigate?: (recordId: string) => void;
+  hiddenFieldIds?: string[];
+  canEdit?: boolean;
 }
 
 const gridModules = import.meta.glob("../features/grid/GridView.tsx");
@@ -127,6 +129,8 @@ export function TableGridPage({
   const queryClient = useQueryClient();
   const viewKind = (activeView?.type as ViewKind | undefined) ?? "grid";
   const { config, update, canEdit, saveError } = useViewConfig(baseId, table.id, activeView);
+  // Record edits follow the base role (editor+), not the view lock.
+  const canEditRecords = useBaseRole(baseId).canEditRecords ?? false;
   const [search, setSearch] = useState("");
   const [count, setCount] = useState<number | undefined>(undefined);
   const [recordId, setRecordId] = useRecordParam();
@@ -169,11 +173,6 @@ export function TableGridPage({
     onCount: setCount,
   };
 
-  const legacyTable = useMemo(
-    () => ({ ...table, fields: visibleFields(table, config) }),
-    [table, config],
-  );
-
   return (
     <div className={viewStyles.page}>
       <ViewToolbar
@@ -211,13 +210,11 @@ export function TableGridPage({
               color={config.color}
               summary={config.summary}
               canEdit={canEdit}
+              canEditRecords={canEditRecords}
               onConfigChange={update}
               onOpenRecord={openRecord}
             />
           </Suspense>
-        ) : null}
-        {viewKind === "grid" && !(activeView && LazyGridView) ? (
-          <DomGrid baseId={baseId} table={legacyTable} onSchemaChange={onSchemaChange} />
         ) : null}
         {viewKind === "kanban" ? <KanbanView {...viewProps} /> : null}
         {viewKind === "calendar" ? <CalendarView {...viewProps} /> : null}
@@ -228,28 +225,18 @@ export function TableGridPage({
         {viewKind === "form" ? <FormView {...viewProps} /> : null}
       </div>
 
-      {recordId ? (
-        LazyRecordDrawer ? (
-          <Suspense fallback={null}>
-            <LazyRecordDrawer
-              baseId={baseId}
-              tableId={table.id}
-              recordId={recordId}
-              onClose={() => setRecordId(null)}
-              onNavigate={(id) => setRecordId(id)}
-            />
-          </Suspense>
-        ) : (
-          <RecordExpandDrawer
+      {recordId && LazyRecordDrawer ? (
+        <Suspense fallback={null}>
+          <LazyRecordDrawer
             baseId={baseId}
             tableId={table.id}
             recordId={recordId}
-            onClose={() => {
-              setRecordId(null);
-              void queryClient.invalidateQueries({ queryKey: ["records", baseId, table.id] });
-            }}
+            onClose={() => setRecordId(null)}
+            onNavigate={(id) => setRecordId(id)}
+            hiddenFieldIds={config.hiddenFieldIds}
+            canEdit={canEditRecords}
           />
-        )
+        </Suspense>
       ) : null}
 
       <AddFieldDialog

@@ -55,6 +55,13 @@ export interface FieldValueEditorProps {
   fields?: FieldLike[] | undefined;
   error?: string | null | undefined;
   placeholder?: string | undefined;
+  /** Put on the editor's main control so a `<label htmlFor>` can point at it. */
+  id?: string | undefined;
+  /**
+   * Id of the visible label. Picker-style editors (select, collaborator, link, attachment,
+   * rating) aren't native form controls, so `htmlFor` can't name them; this does.
+   */
+  labelledBy?: string | undefined;
 }
 
 const TEXT_TYPES = new Set([
@@ -206,7 +213,7 @@ function useDraft(field: FieldLike, value: unknown, initialText: string | undefi
 }
 
 function TextEditor(props: FieldValueEditorProps): ReactElement {
-  const { field, value, onChange, mode = "form", autoFocus, initialText, onDone, placeholder } = props;
+  const { field, value, onChange, mode = "form", autoFocus, initialText, onDone, placeholder, id } = props;
   const d = useDraft(field, value, initialText, onChange);
   const ref = useRef<HTMLInputElement>(null);
   const isNumeric = ["number", "currency", "percent"].includes(field.type);
@@ -226,6 +233,7 @@ function TextEditor(props: FieldValueEditorProps): ReactElement {
   return (
     <input
       ref={ref}
+      id={id}
       className={mode === "cell" ? "tfu-cell-input" : "tfu-input"}
       type="text"
       inputMode={inputMode}
@@ -260,7 +268,7 @@ function TextEditor(props: FieldValueEditorProps): ReactElement {
 }
 
 function LongTextEditor(props: FieldValueEditorProps): ReactElement {
-  const { field, value, onChange, mode = "form", autoFocus, initialText, onDone, placeholder } = props;
+  const { field, value, onChange, mode = "form", autoFocus, initialText, onDone, placeholder, id } = props;
   const d = useDraft(field, value, initialText, onChange);
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -272,6 +280,7 @@ function LongTextEditor(props: FieldValueEditorProps): ReactElement {
   return (
     <textarea
       ref={ref}
+      id={id}
       className={mode === "cell" ? "tfu-cell-area" : "tfu-input"}
       rows={mode === "cell" ? undefined : 4}
       value={d.draft}
@@ -462,7 +471,7 @@ function DateCellEditor(props: FieldValueEditorProps): ReactElement {
 }
 
 function DateFormEditor(props: FieldValueEditorProps): ReactElement {
-  const { field, value, onChange, mode = "form", autoFocus, onDone } = props;
+  const { field, value, onChange, mode = "form", autoFocus, onDone, id } = props;
   const isDT = field.type === "datetime";
   const initial = typeof value === "string" ? (isDT ? isoToLocalInput(value) : value.slice(0, 10)) : "";
   const [draft, setDraft] = useState(initial);
@@ -502,6 +511,7 @@ function DateFormEditor(props: FieldValueEditorProps): ReactElement {
   return (
     <input
       ref={ref}
+      id={id}
       type={isDT ? "datetime-local" : "date"}
       className={mode === "cell" ? "tfu-cell-input" : "tfu-input"}
       value={draft}
@@ -542,6 +552,8 @@ function PickerShell({
   popover,
   onClosePopover,
   popWidth,
+  id,
+  labelledBy,
 }: {
   mode: "cell" | "form";
   autoOpen: boolean;
@@ -549,6 +561,8 @@ function PickerShell({
   popover: (close: () => void) => ReactNode;
   onClosePopover?: () => void;
   popWidth?: number;
+  id?: string | undefined;
+  labelledBy?: string | undefined;
 }): ReactElement {
   const boxRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(autoOpen);
@@ -564,6 +578,11 @@ function PickerShell({
     <>
       <div
         ref={boxRef}
+        id={id}
+        role="combobox"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-labelledby={labelledBy}
         className={mode === "cell" ? "tfu-cell-box" : "tfu-form-box"}
         onClick={() => setOpen(true)}
         tabIndex={mode === "form" ? 0 : -1}
@@ -626,6 +645,8 @@ function SelectEditor(props: FieldValueEditorProps): ReactElement {
     <PickerShell
       mode={mode}
       autoOpen={mode === "cell"}
+      id={props.id}
+      labelledBy={props.labelledBy}
       onClosePopover={() => {
         if (mode === "cell") onDone?.("blur");
       }}
@@ -738,6 +759,8 @@ function CollaboratorEditor(props: FieldValueEditorProps): ReactElement {
     <PickerShell
       mode={mode}
       autoOpen={mode === "cell"}
+      id={props.id}
+      labelledBy={props.labelledBy}
       onClosePopover={() => {
         if (mode === "cell") onDone?.("blur");
       }}
@@ -825,6 +848,8 @@ function LinkEditor(props: FieldValueEditorProps): ReactElement {
         {allowMultiple || local.length === 0 ? (
           <button
             type="button"
+            id={props.id}
+            aria-labelledby={props.labelledBy && props.id ? `${props.labelledBy} ${props.id}` : undefined}
             className="tfu-btn"
             onClick={(e) => {
               e.stopPropagation();
@@ -963,7 +988,14 @@ function AttachmentEditor(props: FieldValueEditorProps): ReactElement {
       />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: local.length ? 6 : 0 }}>
         {services.uploadAttachment ? (
-          <button type="button" className="tfu-btn" disabled={progress !== null} onClick={() => fileRef.current?.click()}>
+          <button
+            type="button"
+            id={props.id}
+            aria-labelledby={props.labelledBy && props.id ? `${props.labelledBy} ${props.id}` : undefined}
+            className="tfu-btn"
+            disabled={progress !== null}
+            onClick={() => fileRef.current?.click()}
+          >
             {progress !== null ? `Uploading… ${Math.round(progress * 100)}%` : "+ Attach file"}
           </button>
         ) : (
@@ -992,6 +1024,9 @@ function RatingEditor(props: FieldValueEditorProps): ReactElement {
   return (
     <div
       ref={ref}
+      id={props.id}
+      role="group"
+      aria-labelledby={props.labelledBy}
       tabIndex={0}
       className="tfu-stars"
       style={{ outline: "none", padding: mode === "cell" ? "0 8px" : 0, height: "100%", alignItems: "center" }}
@@ -1039,6 +1074,7 @@ function CheckboxEditor(props: FieldValueEditorProps): ReactElement {
     <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
       <input
         type="checkbox"
+        id={props.id}
         checked={value === true}
         onChange={(e) => onChange(e.target.checked ? true : null)}
         style={{ width: 16, height: 16, accentColor: "#20c933" }}

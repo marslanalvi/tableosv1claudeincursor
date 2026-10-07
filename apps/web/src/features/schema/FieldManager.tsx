@@ -48,7 +48,10 @@ export function FieldManager({
               setLocalHidden(null);
               toastError(`Couldn't update the view: ${errorMessage(e)}`);
             })
-            .finally(() => void qc.invalidateQueries({ queryKey: ["bases", baseId] }));
+            .finally(() => {
+              void qc.invalidateQueries({ queryKey: ["bases", baseId] });
+              void qc.invalidateQueries({ queryKey: ["views", baseId] });
+            });
         }
       : undefined);
   const fields = table.fields as unknown as FieldWire[];

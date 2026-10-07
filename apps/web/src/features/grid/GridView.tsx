@@ -36,7 +36,7 @@ import {
 import type { FieldWire } from "../../lib/api-areas/fields.ts";
 import { FieldDialog } from "../schema/FieldDialog.tsx";
 import { useFieldActions } from "../schema/field-actions.ts";
-import { useFieldServices } from "./field-services.tsx";
+import { useBaseRole, useFieldServices } from "./field-services.tsx";
 import {
   ADD_COL_W,
   ADD_ROW_H,
@@ -82,7 +82,12 @@ export interface GridViewProps {
   rowHeight: ViewConfig["rowHeight"];
   color: ViewConfig["color"];
   summary: ViewConfig["summary"];
+  /** Can change this view's config (sort, widths, hidden fields…). */
   canEdit: boolean;
+  /** Can create/edit/delete records. Defaults to the user's base role (editor or higher). */
+  canEditRecords?: boolean;
+  /** Can add/edit/delete fields. Defaults to the user's base role (creator or owner). */
+  canEditSchema?: boolean;
   onConfigChange(patch: Partial<ViewConfig>): void;
   onOpenRecord(recordId: string): void;
 }
@@ -97,6 +102,8 @@ type Item =
   | { kind: "group"; path: string; depth: number; field: Field; label: string; color?: string | undefined; count: number; collapsed: boolean };
 
 const PAGE_SIZE = 200;
+/** Later pages are bigger (server max) so jumping far down a large table catches up quickly. */
+const NEXT_PAGE_SIZE = 500;
 
 function recordUrl(recordId: string): string {
   const url = new URL(window.location.href);
@@ -149,6 +156,9 @@ export function GridView(props: GridViewProps) {
     },
     [canEdit, saveViewConfig],
   );
+  const baseRole = useBaseRole(baseId);
+  const canEditRecords = props.canEditRecords ?? baseRole.canEditRecords ?? false;
+  const canEditSchema = props.canEditSchema ?? baseRole.canEditSchema ?? false;
   const qc = useQueryClient();
   const services = useFieldServices(baseId);
   const fieldActions = useFieldActions(baseId, table.id);
@@ -212,7 +222,7 @@ export function GridView(props: GridViewProps) {
       recordsApi.query(
         baseId,
         table.id,
-        { filter: filter ?? null, sort: effSort, search: term, pageSize: PAGE_SIZE, cursor: pageParam },
+        { filter: filter ?? null, sort: effSort, search: term, pageSize: pageParam ? NEXT_PAGE_SIZE : PAGE_SIZE, cursor: pageParam },
         signal,
       ),
     getNextPageParam: (last) => last?.nextCursor ?? undefined,
@@ -241,8 +251,12 @@ export function GridView(props: GridViewProps) {
     return rows;
   }, [pages, writes.withOverrides, term, allFields]);
 
-  const totalCount = pages?.[0]?.totalCount;
   const hasMore = !!query.hasNextPage;
+  // The server count covers filter + search. Don't trust it while the previous query's pages
+  // are still shown (search just changed), or when the client-side search guard dropped rows.
+  const serverCount = query.isPlaceholderData ? undefined : pages?.[0]?.totalCount;
+  const loadedCount = (pages ?? []).reduce((n, p) => n + (p?.records?.length ?? 0), 0);
+  const totalCount = term && !hasMore && serverCount !== undefined && records.length < loadedCount ? records.length : serverCount;
 
   // Summary bar: server aggregates cover every matching record, not just loaded pages.
   const summaryAggs = useMemo(() => {
@@ -335,6 +349,11 @@ export function GridView(props: GridViewProps) {
     });
     return { tops, height: y };
   }, [items, rowH]);
+  // Space for rows the server has but we haven't loaded, so the scrollbar spans the whole table.
+  // Scrolling into it keeps loading pages (see "Infinite loading" below). Grouped views load everything.
+  const pendingRows =
+    hasMore && !(groups?.length) && typeof serverCount === "number" ? Math.max(0, serverCount - loadedCount) : 0;
+  const pendingHeight = pendingRows * rowH;
   const navIndexById = useMemo(() => new Map(navRows.map((r, i) => [r.id, i])), [navRows]);
   const itemIndexByNav = useMemo(() => {
     const m: number[] = [];
@@ -491,7 +510,7 @@ export function GridView(props: GridViewProps) {
   const startEdit = useCallback(
     (cell: Cell, initialText?: string) => {
       const f = fieldById(cell.f);
-      if (!f || !isEditableField(f, canEdit)) return false;
+      if (!f || !isEditableField(f, canEditRecords)) return false;
       if (f.type === "checkbox") return false;
       setActive(cell);
       setAnchor(cell);
@@ -499,17 +518,17 @@ export function GridView(props: GridViewProps) {
       setEditing({ ...cell, initialText });
       return true;
     },
-    [fieldById, canEdit],
+    [fieldById, canEditRecords],
   );
 
   const toggleCheckbox = useCallback(
     (cell: Cell) => {
       const f = fieldById(cell.f);
       const rec = records.find((r) => r.id === cell.r);
-      if (!f || !rec || f.type !== "checkbox" || !isEditableField(f, canEdit)) return;
+      if (!f || !rec || f.type !== "checkbox" || !isEditableField(f, canEditRecords)) return;
       void writes.writeRecord(rec.id, { [f.id]: rec.fields[f.id] === true ? null : true });
     },
-    [fieldById, records, canEdit, writes],
+    [fieldById, records, canEditRecords, writes],
   );
 
   const onEditDone = useCallback(
@@ -542,14 +561,14 @@ export function GridView(props: GridViewProps) {
   const clearRange = useCallback(() => {
     const byRec = new Map<string, Record<string, unknown>>();
     for (const { rec, field } of rangeCells()) {
-      if (!isEditableField(field, canEdit) || isEmptyValue(rec.fields[field.id])) continue;
+      if (!isEditableField(field, canEditRecords) || isEmptyValue(rec.fields[field.id])) continue;
       const cur = byRec.get(rec.id) ?? {};
       cur[field.id] = null;
       byRec.set(rec.id, cur);
     }
     if (byRec.size === 0) return;
     void writes.writeMany([...byRec].map(([id, fields]) => ({ id, fields })));
-  }, [rangeCells, canEdit, writes]);
+  }, [rangeCells, canEditRecords, writes]);
 
   const copyRange = useCallback(
     (e: ClipboardEvent) => {
@@ -606,7 +625,7 @@ export function GridView(props: GridViewProps) {
 
   const pasteText = useCallback(
     async (text: string) => {
-      if (!canEdit || !active) return;
+      if (!canEditRecords || !active) return;
       const grid = parseTsv(text);
       if (grid.length === 0) return;
       const r0 = range ? range.top : (navIndexById.get(active.r) ?? 0);
@@ -679,7 +698,7 @@ export function GridView(props: GridViewProps) {
       const n = updates.length + newRows.length;
       if (n > 1) toastInfo(`Pasted into ${n} records`);
     },
-    [canEdit, active, range, navIndexById, colIndexById, navRows, columns, fieldById, writes, hasMore, baseId, table.id, appendToCache, qc],
+    [canEditRecords, active, range, navIndexById, colIndexById, navRows, columns, fieldById, writes, hasMore, baseId, table.id, appendToCache, qc],
   );
 
   // Clipboard events go to <body> when a non-editable element is focused.
@@ -717,7 +736,7 @@ export function GridView(props: GridViewProps) {
 
   const createRecordAt = useCallback(
     async (pos?: { before?: string; after?: string }) => {
-      if (!canEdit) return;
+      if (!canEditRecords) return;
       try {
         const rec = await recordsApi.create(baseId, table.id, {});
         if (!rec) {
@@ -740,14 +759,14 @@ export function GridView(props: GridViewProps) {
           requestAnimationFrame(() => {
             setActive({ r: rec.id, f: firstCol.id });
             setAnchor({ r: rec.id, f: firstCol.id });
-            if (isEditableField(firstCol, canEdit) && firstCol.type !== "checkbox") setEditing({ r: rec.id, f: firstCol.id });
+            if (isEditableField(firstCol, canEditRecords) && firstCol.type !== "checkbox") setEditing({ r: rec.id, f: firstCol.id });
           });
         }
       } catch (e) {
         toastError(`Couldn't add record: ${errorMessage(e)}`);
       }
     },
-    [canEdit, baseId, table.id, pages, appendToCache, columns, qc],
+    [canEditRecords, baseId, table.id, pages, appendToCache, columns, qc],
   );
 
   // Scroll to newly-selected rows once they exist.
@@ -808,7 +827,7 @@ export function GridView(props: GridViewProps) {
   const [menu, setMenu] = useState<null | { x: number; y: number; items: MenuEntry[] }>(null);
   const [fieldDialog, setFieldDialog] = useState<null | { field?: FieldWire; insert?: { at: string; side: "left" | "right" } }>(null);
 
-  const canReorderRows = canEdit && effSort.length === 0 && !term;
+  const canReorderRows = canEditRecords && effSort.length === 0 && !term;
 
   const openRowMenu = useCallback(
     (x: number, y: number, recId: string) => {
@@ -817,16 +836,16 @@ export function GridView(props: GridViewProps) {
       const items: MenuEntry[] = [
         { key: "expand", icon: "⤢", label: "Expand record", onSelect: () => onOpenRecord(recId), disabled: multi },
         { key: "d0", label: "", divider: true },
-        { key: "above", icon: "↑", label: "Insert record above", disabled: !canEdit || multi, onSelect: () => void createRecordAt({ before: recId }) },
-        { key: "below", icon: "↓", label: "Insert record below", disabled: !canEdit || multi, onSelect: () => void createRecordAt({ after: recId }) },
-        { key: "dup", icon: "⧉", label: multi ? `Duplicate ${ids.length} records` : "Duplicate record", disabled: !canEdit, onSelect: () => void duplicateRecords(ids) },
+        { key: "above", icon: "↑", label: "Insert record above", disabled: !canEditRecords || multi, onSelect: () => void createRecordAt({ before: recId }) },
+        { key: "below", icon: "↓", label: "Insert record below", disabled: !canEditRecords || multi, onSelect: () => void createRecordAt({ after: recId }) },
+        { key: "dup", icon: "⧉", label: multi ? `Duplicate ${ids.length} records` : "Duplicate record", disabled: !canEditRecords, onSelect: () => void duplicateRecords(ids) },
         { key: "link", icon: "🔗", label: "Copy record URL", disabled: multi, onSelect: () => void copyText(recordUrl(recId)) },
         { key: "d1", label: "", divider: true },
-        { key: "del", icon: "🗑", label: multi ? `Delete ${ids.length} records` : "Delete record", danger: true, disabled: !canEdit, onSelect: () => deleteRecords(ids) },
+        { key: "del", icon: "🗑", label: multi ? `Delete ${ids.length} records` : "Delete record", danger: true, disabled: !canEditRecords, onSelect: () => deleteRecords(ids) },
       ];
       setMenu({ x, y, items });
     },
-    [selectedRows, onOpenRecord, canEdit, createRecordAt, duplicateRecords, deleteRecords],
+    [selectedRows, onOpenRecord, canEditRecords, createRecordAt, duplicateRecords, deleteRecords],
   );
 
   const openHeaderMenu = useCallback(
@@ -847,10 +866,10 @@ export function GridView(props: GridViewProps) {
         onConfigChange({ filter: next as ViewConfig["filter"] });
       };
       const items: MenuEntry[] = [
-        { key: "edit", icon: "✎", label: "Edit field", disabled: !canEdit, onSelect: () => setFieldDialog({ field: field as FieldWire }) },
-        { key: "dup", icon: "⧉", label: "Duplicate field", disabled: !canEdit, onSelect: () => void fieldActions.duplicate(field as FieldWire, true).catch(() => undefined) },
-        { key: "left", icon: "←", label: "Insert left", disabled: !canEdit || isPrimary, onSelect: () => setFieldDialog({ insert: { at: field.id, side: "left" } }) },
-        { key: "right", icon: "→", label: "Insert right", disabled: !canEdit, onSelect: () => setFieldDialog({ insert: { at: field.id, side: "right" } }) },
+        { key: "edit", icon: "✎", label: "Edit field", disabled: !canEditSchema, onSelect: () => setFieldDialog({ field: field as FieldWire }) },
+        { key: "dup", icon: "⧉", label: "Duplicate field", disabled: !canEditSchema, onSelect: () => void fieldActions.duplicate(field as FieldWire, true).catch(() => undefined) },
+        { key: "left", icon: "←", label: "Insert left", disabled: !canEditSchema || isPrimary, onSelect: () => setFieldDialog({ insert: { at: field.id, side: "left" } }) },
+        { key: "right", icon: "→", label: "Insert right", disabled: !canEditSchema, onSelect: () => setFieldDialog({ insert: { at: field.id, side: "right" } }) },
         { key: "d0", label: "", divider: true },
         { key: "copyurl", icon: "🔗", label: "Copy field URL", onSelect: () => void copyText(`${window.location.origin}${window.location.pathname}?field=${field.id}`) },
         { key: "copyid", icon: "#", label: "Copy field ID", hint: field.id, onSelect: () => void copyText(field.id) },
@@ -885,7 +904,7 @@ export function GridView(props: GridViewProps) {
           icon: "🗑",
           label: isPrimary ? "Primary field can't be deleted" : "Delete field",
           danger: true,
-          disabled: isPrimary || !canEdit,
+          disabled: isPrimary || !canEditSchema,
           onSelect: () =>
             setConfirm({
               title: `Delete field "${field.name}"?`,
@@ -897,7 +916,7 @@ export function GridView(props: GridViewProps) {
       ];
       setMenu({ x, y, items });
     },
-    [primaryId, colIndexById, groups, active, lookupMap, filter, onConfigChange, canEdit, fieldActions, hiddenFieldIds, frozenCount],
+    [primaryId, colIndexById, groups, active, lookupMap, filter, onConfigChange, canEdit, canEditSchema, fieldActions, hiddenFieldIds, frozenCount],
   );
 
   const openSummaryMenu = useCallback(
@@ -1078,7 +1097,7 @@ export function GridView(props: GridViewProps) {
     setFillTo(null);
     if (field?.type === "checkbox" && target.closest("[data-tfu-checkbox]")) toggleCheckbox(cell);
     const star = target.closest<HTMLElement>("[data-tfu-rating]");
-    if (field?.type === "rating" && star && isEditableField(field, canEdit)) {
+    if (field?.type === "rating" && star && isEditableField(field, canEditRecords)) {
       const n = Number(star.dataset["tfuRating"]);
       const cur = lookupMap.get(cell.r)?.fields[field.id];
       void writes.writeRecord(cell.r, { [field.id]: cur === n ? null : n });
@@ -1116,7 +1135,7 @@ export function GridView(props: GridViewProps) {
           const fields: Record<string, unknown> = {};
           for (let c = range.left; c <= range.right; c++) {
             const f = columns[c]!;
-            if (!isEditableField(f, canEdit)) continue;
+            if (!isEditableField(f, canEditRecords)) continue;
             fields[f.id] = src.fields[f.id] ?? null;
           }
           if (Object.keys(fields).length) updates.push({ id: dest.id, fields });
@@ -1132,7 +1151,7 @@ export function GridView(props: GridViewProps) {
     };
     window.addEventListener("mouseup", onUp);
     return () => window.removeEventListener("mouseup", onUp);
-  }, [fillTo, range, navRows, columns, canEdit, writes, anchor]);
+  }, [fillTo, range, navRows, columns, canEditRecords, writes, anchor]);
 
   // ------------------------------------------------------------------ keyboard
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1202,7 +1221,7 @@ export function GridView(props: GridViewProps) {
     }
     if (key.length === 1 && !mod && !e.altKey && field) {
       const textual = !["single_select", "multi_select", "collaborator", "link", "attachment", "rating", "checkbox"].includes(field.type);
-      if (field.type === "rating" && /^[0-9]$/.test(key) && isEditableField(field, canEdit)) {
+      if (field.type === "rating" && /^[0-9]$/.test(key) && isEditableField(field, canEditRecords)) {
         e.preventDefault();
         void writes.writeRecord(active.r, { [field.id]: Number(key) || null });
         return;
@@ -1285,7 +1304,7 @@ export function GridView(props: GridViewProps) {
           const inRange = !!range && ni >= range.top && ni <= range.bottom && c.idx >= range.left && c.idx <= range.right && !(range.top === range.bottom && range.left === range.right);
           const isEditing = editing?.r === rec.id && editing.f === f.id;
           const isFill = fillTo !== null && !!range && ni > range.bottom && ni <= fillTo && c.idx >= range.left && c.idx <= range.right;
-          const isRangeCorner = !!range && ni === range.bottom && c.idx === range.right && canEdit && !editing;
+          const isRangeCorner = !!range && ni === range.bottom && c.idx === range.right && canEditRecords && !editing;
           const style: CSSProperties = { width: c.w };
           if (c.frozen) style.left = c.x;
           const cls = [
@@ -1391,7 +1410,10 @@ export function GridView(props: GridViewProps) {
     return computeSummary(f, kind, records) + (hasMore ? "+" : "");
   };
 
-  const bodyHeight = offsets.height + ADD_ROW_H + (query.isFetchingNextPage ? 32 : 0);
+  const bodyHeight = offsets.height + pendingHeight + ADD_ROW_H + (query.isFetchingNextPage && !pendingRows ? 32 : 0);
+  const loadingTop = pendingRows
+    ? Math.min(offsets.height + pendingHeight - 32, Math.max(offsets.height + 8, viewport.top - bodyTopInScroll + viewport.height / 2))
+    : offsets.height + ADD_ROW_H + 8;
   const shownCount = typeof totalCount === "number" ? totalCount : records.length;
 
   const insertFieldAt = (created: FieldWire, ins: { at: string; side: "left" | "right" }) => {
@@ -1443,7 +1465,7 @@ export function GridView(props: GridViewProps) {
                     style={style}
                     title={f.description ? `${f.name} — ${f.description}` : f.name}
                     onMouseDown={(e) => beginHeaderDrag(e, f)}
-                    onDoubleClick={() => canEdit && setFieldDialog({ field: f as FieldWire })}
+                    onDoubleClick={() => canEditSchema && setFieldDialog({ field: f as FieldWire })}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       openHeaderMenu(e.clientX, e.clientY, f);
@@ -1472,7 +1494,7 @@ export function GridView(props: GridViewProps) {
                 className={styles.addColBtn}
                 title="Add field"
                 aria-label="Add field"
-                disabled={!canEdit}
+                disabled={!canEditSchema}
                 onClick={() => setFieldDialog({})}
               >
                 +
@@ -1495,12 +1517,19 @@ export function GridView(props: GridViewProps) {
             >
               {visibleItems}
               {rowDrag ? <span className={styles.rowDropLine} style={{ top: rowDrag.y - 1, width: totalWidth }} /> : null}
-              <div className={styles.addRow} style={{ top: offsets.height, width: totalWidth }}>
+              {pendingRows ? (
+                <div
+                  className={styles.pendingRows}
+                  style={{ top: offsets.height, height: pendingHeight, width: totalWidth, backgroundSize: `100% ${rowH}px` }}
+                  aria-hidden="true"
+                />
+              ) : null}
+              <div className={styles.addRow} style={{ top: offsets.height + pendingHeight, width: totalWidth }}>
                 <button
                   type="button"
                   className={styles.addRowBtn}
                   style={{ width: ROWNUM_W + frozenWidth }}
-                  disabled={!canEdit}
+                  disabled={!canEditRecords}
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => void createRecordAt()}
                   title="Add record"
@@ -1509,7 +1538,7 @@ export function GridView(props: GridViewProps) {
                 </button>
               </div>
               {query.isFetchingNextPage ? (
-                <div className={styles.loadingMore} style={{ top: offsets.height + ADD_ROW_H + 8 }}>
+                <div className={styles.loadingMore} style={{ top: loadingTop }}>
                   Loading more records…
                 </div>
               ) : null}
@@ -1533,8 +1562,14 @@ export function GridView(props: GridViewProps) {
             {/* summary bar */}
             <div className={styles.summary} style={{ width: totalWidth }}>
               <div className={`${styles.scell} ${styles.stotal}`} style={{ width: ROWNUM_W + (colLayout[0]?.w ?? 0) }}>
-                {shownCount.toLocaleString()} {shownCount === 1 ? "record" : "records"}
-                {hasMore && typeof totalCount !== "number" ? "+" : ""}
+                {query.isPlaceholderData ? (
+                  "Loading…"
+                ) : (
+                  <>
+                    {shownCount.toLocaleString()} {shownCount === 1 ? "record" : "records"}
+                    {hasMore && typeof totalCount !== "number" ? "+" : ""}
+                  </>
+                )}
               </div>
               {colLayout.slice(1).map((c) => {
                 const kind = (summary?.[c.field.id] ?? "none") as SummaryKind;
@@ -1575,7 +1610,7 @@ export function GridView(props: GridViewProps) {
             <span>
               {selectedRows.size} {selectedRows.size === 1 ? "record" : "records"} selected
             </span>
-            {canEdit ? (
+            {canEditRecords ? (
               <>
                 <button type="button" className={styles.bulkBtn} onClick={() => void duplicateRecords([...selectedRows])}>
                   Duplicate

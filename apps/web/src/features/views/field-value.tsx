@@ -2,6 +2,7 @@ import * as fieldUi from "@tabula/field-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, type ComponentType, type ReactNode } from "react";
 import { request, type FieldDto } from "../../lib/api.ts";
+import { FieldServices } from "../grid/field-services.tsx";
 import { colorOf, selectOptions, valueToText } from "./view-utils.ts";
 import styles from "./views.module.css";
 
@@ -11,7 +12,9 @@ const ui = fieldUi as unknown as {
     field: FieldDto;
     value: unknown;
     onChange: (v: unknown) => void;
-    baseId?: string;
+    mode?: "cell" | "form";
+    id?: string | undefined;
+    labelledBy?: string | undefined;
   }>;
   renderCellValue?: (field: FieldDto, value: unknown) => ReactNode;
 };
@@ -134,6 +137,7 @@ export function ValueEditor({
   onChange,
   autoFocus,
   id,
+  labelledBy,
   compact,
 }: {
   baseId: string;
@@ -142,6 +146,7 @@ export function ValueEditor({
   onChange: (v: unknown) => void;
   autoFocus?: boolean;
   id?: string;
+  labelledBy?: string;
   compact?: boolean;
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
@@ -151,7 +156,11 @@ export function ValueEditor({
   const collabs = useCollaborators(baseId, field.type === "collaborator");
   if (ui.FieldValueEditor) {
     const Editor = ui.FieldValueEditor;
-    return <Editor field={field} value={value} onChange={onChange} baseId={baseId} />;
+    return (
+      <FieldServices baseId={baseId}>
+        <Editor field={field} value={value} onChange={onChange} mode="form" id={id} labelledBy={labelledBy} />
+      </FieldServices>
+    );
   }
   const cls = compact ? styles.inputCompact : styles.input;
   switch (field.type) {

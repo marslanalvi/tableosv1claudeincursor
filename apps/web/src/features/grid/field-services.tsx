@@ -79,6 +79,31 @@ export function useBaseDetail(baseId: string) {
   });
 }
 
+export type BaseRole = "owner" | "creator" | "editor" | "commenter" | "viewer";
+
+/** The signed-in user's effective role in the base (`GET /v1/bases/:b/collaborators` + `/v1/auth/me`). */
+export function useBaseRole(baseId: string) {
+  const q = useQuery({
+    queryKey: ["base-role", baseId],
+    queryFn: async () => {
+      const [list, me] = await Promise.all([
+        listBaseCollaborators(baseId),
+        request<{ user?: { id: string } }>("/v1/auth/me"),
+      ]);
+      const mine = list.find((c) => c.id === me.user?.id);
+      return (mine?.role ?? "viewer") as BaseRole;
+    },
+    staleTime: 60_000,
+  });
+  const role = q.data;
+  return {
+    role,
+    /** `undefined` until the role has loaded. */
+    canEditRecords: role === undefined ? undefined : role === "owner" || role === "creator" || role === "editor",
+    canEditSchema: role === undefined ? undefined : role === "owner" || role === "creator",
+  };
+}
+
 export function primaryFieldOf(table: { primaryFieldId?: string; fields: FieldLike[] }): FieldLike | undefined {
   return table.fields.find((f) => f.id === table.primaryFieldId) ?? table.fields.find((f) => f.isPrimary) ?? table.fields[0];
 }

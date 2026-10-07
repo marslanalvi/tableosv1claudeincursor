@@ -112,7 +112,7 @@ export function FormPreview({
       {items.length === 0 ? <p className={styles.muted}>This form has no fields yet.</p> : null}
       {items.map(({ ff, field }) => (
         <div key={field.id} className={styles.formField}>
-          <label className={styles.formLabel} htmlFor={`form-${field.id}`}>
+          <label className={styles.formLabel} htmlFor={`form-${field.id}`} id={`form-${field.id}-label`}>
             {ff.label?.trim() || field.name}
             {ff.required ? <span className={styles.required}> *</span> : null}
           </label>
@@ -120,6 +120,7 @@ export function FormPreview({
           <ValueEditor
             baseId={baseId}
             id={`form-${field.id}`}
+            labelledBy={`form-${field.id}-label`}
             field={field}
             value={values[field.id]}
             onChange={(v) => {
