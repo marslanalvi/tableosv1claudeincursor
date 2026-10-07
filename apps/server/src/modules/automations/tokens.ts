@@ -11,6 +11,8 @@ export interface FieldMeta {
   type: string;
   slot?: number;
   config?: Record<string, unknown>;
+  /** Lookup fields: the looked-up field (resolved from `config.targetFieldId`). */
+  lookupTarget?: { id: string; type: string; config: Record<string, unknown> } | null;
 }
 
 export interface TableMeta {
@@ -68,8 +70,12 @@ export function displayValue(field: FieldMeta | undefined, value: unknown): stri
       return value === true ? "true" : "false";
     case "barcode":
       return typeof value === "object" && value ? String((value as { text?: unknown }).text ?? "") : String(value);
-    case "lookup":
-      return Array.isArray(value) ? value.map((v) => stringify(v)).join(", ") : stringify(value);
+    case "lookup": {
+      const target = field.lookupTarget;
+      const inner: FieldMeta | undefined = target ? { id: target.id, name: "", type: target.type, config: target.config } : undefined;
+      const arr = Array.isArray(value) ? value : [value];
+      return arr.map((v) => (inner ? displayValue(inner, v) : stringify(v))).filter((s) => s !== "").join(", ");
+    }
     default:
       return stringify(value);
   }

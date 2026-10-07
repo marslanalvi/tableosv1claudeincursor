@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evaluateWireFilter } from "./filter-eval.js";
+import { encodePublicId } from "@tabula/types";
+import { evaluateWireFilter, resolveLookupTargets } from "./filter-eval.js";
 import { nextScheduledRun } from "./schedule.js";
 import { compareCondition, interpolate, interpolateValue, recordContext, type TableMeta } from "./tokens.js";
 
@@ -55,6 +56,56 @@ test("filter evaluation on wire records", () => {
     true,
   );
   assert.equal(evaluateWireFilter(null, record, table.fields), true);
+});
+
+test("lookup conditions compare target display values (select labels, names, filenames)", () => {
+  const u = (n: number) => `0190a000-0000-7000-8000-${String(n).padStart(12, "0")}`;
+  const fid = (n: number) => encodePublicId({ prefix: "fld", uuid: u(n) });
+  const peer: TableMeta = {
+    id: "tbl_2",
+    name: "Projects",
+    views: [],
+    fields: [
+      { id: fid(1), name: "Phase", type: "single_select", config: { options: [{ id: "opt_p", label: "Planning" }, { id: "opt_s", label: "Shipped" }] } },
+      { id: fid(2), name: "Lead", type: "collaborator" },
+      { id: fid(3), name: "Spec", type: "attachment" },
+      { id: fid(4), name: "Client", type: "link" },
+    ],
+  };
+  const tasks: TableMeta = {
+    id: "tbl_3",
+    name: "Tasks",
+    views: [],
+    fields: [
+      { id: "fld_lp", name: "Phase (from Project)", type: "lookup", config: { targetFieldId: fid(1) } },
+      { id: "fld_ll", name: "Lead (from Project)", type: "lookup", config: { targetFieldId: u(2) } },
+      { id: "fld_la", name: "Spec (from Project)", type: "lookup", config: { lookupFieldId: fid(3) } },
+      { id: "fld_lc", name: "Client (from Project)", type: "lookup", config: { targetFieldId: fid(4) } },
+    ],
+  };
+  resolveLookupTargets([peer, tasks]);
+  assert.equal(tasks.fields[0]!.lookupTarget?.type, "single_select");
+  assert.equal(tasks.fields[1]!.lookupTarget?.type, "collaborator");
+  assert.equal(tasks.fields[2]!.lookupTarget?.type, "attachment");
+  const rec = {
+    id: "rec_9",
+    fields: {
+      fld_lp: ["opt_s"],
+      fld_ll: [{ id: "usr_2", name: "Bea", email: "bea@x.test" }],
+      fld_la: [{ id: "att_1", filename: "brief.pdf", url: "https://x.test/brief.pdf" }],
+      fld_lc: [{ id: "rec_c", name: "Acme Corp" }],
+    },
+  };
+  const f = (op: string, fieldId: string, value?: unknown) => ({ kind: "condition", fieldId, op, value });
+  assert.equal(evaluateWireFilter(f("contains", "fld_lp", "Shipped"), rec, tasks.fields), true);
+  assert.equal(evaluateWireFilter(f("eq", "fld_lp", "Shipped"), rec, tasks.fields), true);
+  assert.equal(evaluateWireFilter(f("contains", "fld_lp", "Planning"), rec, tasks.fields), false);
+  assert.equal(evaluateWireFilter(f("contains", "fld_lp", "opt_s"), rec, tasks.fields), false);
+  assert.equal(evaluateWireFilter(f("contains", "fld_ll", "Bea"), rec, tasks.fields), true);
+  assert.equal(evaluateWireFilter(f("contains", "fld_la", "brief"), rec, tasks.fields), true);
+  assert.equal(evaluateWireFilter(f("contains", "fld_lc", "acme"), rec, tasks.fields), true);
+  const ctx = { trigger: { record: recordContext(tasks, rec) } };
+  assert.equal(interpolate("{{trigger.record.fields.Phase (from Project)}}", ctx), "Shipped");
 });
 
 test("branch condition comparisons", () => {

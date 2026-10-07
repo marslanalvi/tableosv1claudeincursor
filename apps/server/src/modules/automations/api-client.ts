@@ -1,4 +1,5 @@
 import { SESSION_COOKIE_NAME } from "@tabula/auth";
+import { resolveLookupTargets } from "./filter-eval.js";
 import type { TableMeta, WireRecord } from "./tokens.js";
 
 /**
@@ -93,7 +94,7 @@ export class AutomationApiClient {
         config: (v["config"] ?? {}) as Record<string, unknown>,
       })),
     }));
-    this.baseCache = { id: baseId, name: String(b["name"] ?? ""), tables };
+    this.baseCache = { id: baseId, name: String(b["name"] ?? ""), tables: resolveLookupTargets(tables) };
     return this.baseCache;
   }
 
