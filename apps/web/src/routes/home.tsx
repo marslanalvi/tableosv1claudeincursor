@@ -207,7 +207,6 @@ function MembersDialog({
           onChange={(e) => setRole(e.target.value)}
           aria-label="Role"
         >
-          <option value="owner">Owner</option>
           <option value="creator">Creator</option>
           <option value="editor">Editor</option>
           <option value="commenter">Commenter</option>
@@ -228,6 +227,10 @@ function MembersDialog({
           <input className={uiStyles.input} readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} />
         </p>
       ) : null}
+      <p className={uiStyles.muted}>
+        Only the owner can invite people. To give someone access to a single base, set an end date, approve their devices or remove them, open{" "}
+        <a href="/admin">Members &amp; access</a>.
+      </p>
       <h3 className={styles.membersTitle}>Workspace members</h3>
       {membersQuery.isLoading ? (
         <p className={uiStyles.muted}>Loading…</p>

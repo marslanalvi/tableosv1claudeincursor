@@ -5,6 +5,7 @@ import {
   type WorkspaceRole,
 } from "@tabula/permissions";
 import { sql } from "kysely";
+import { requestMayAccess } from "../../kernel/request-context.js";
 
 export type OrgRole = "owner" | "admin" | "billing_admin" | "member" | "guest";
 
@@ -62,7 +63,7 @@ export async function getWorkspaceAccess(
     LIMIT 1
   `.execute(db);
   const row = res.rows[0];
-  if (!row) return null;
+  if (!row || !requestMayAccess(row.org_id)) return null;
   let role: WorkspaceRole | null = (row.grant_role as WorkspaceRole | null) ?? null;
   if (orgRoleGrantsWorkspaceOwner(row.org_role)) {
     role = role ? maxWorkspaceRole(role, "owner") : "owner";
@@ -82,6 +83,14 @@ export async function getOrgRole(
     LIMIT 1
   `.execute(db);
   return (res.rows[0]?.role as OrgRole | undefined) ?? null;
+}
+
+/**
+ * Only the organization owner invites people, changes their roles, approves
+ * devices and issues API tokens.
+ */
+export async function isOrgOwner(db: TabulaDb, userId: string, orgId: string): Promise<boolean> {
+  return requestMayAccess(orgId) && (await getOrgRole(db, userId, orgId)) === "owner";
 }
 
 /** Workspace roles can manage members when they are owner or creator. */

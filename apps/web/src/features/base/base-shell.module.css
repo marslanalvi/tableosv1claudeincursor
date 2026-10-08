@@ -444,7 +444,7 @@
 
 .startOptions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
@@ -532,4 +532,94 @@
   padding: 32px 0;
   text-align: center;
   color: var(--tabula-color-text-muted);
+}
+
+/* IDs & API dialog */
+.idRow {
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.idLabel {
+  font-size: 13px;
+  color: var(--tabula-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.idValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--tabula-color-bg-strong, #f2f2f2);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+.idList {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--tabula-color-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.idCode {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #1f2328;
+  color: #e6edf3;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.idLink {
+  color: var(--tabula-color-info, #1b61c9);
+  font-size: 13px;
+}
+.syncBadge {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--tabula-color-text-muted);
+}
+
+.syncBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--tabula-color-text-muted);
+  background: #eef4ff;
+  border-bottom: 1px solid var(--tabula-color-border);
+}
+.syncBar[data-state="error"] {
+  background: #fff1f0;
+}
+.syncBar[data-state="paused"] {
+  background: #f6f6f6;
+}
+.syncBar strong {
+  font-weight: 500;
+  color: var(--tabula-color-text);
+}
+.syncErr {
+  color: var(--tabula-color-danger);
+}
+.syncBtn {
+  margin-left: auto;
+  font: inherit;
+  font-weight: 500;
+  border: 1px solid var(--tabula-color-border-strong);
+  background: var(--tabula-color-bg);
+  border-radius: 6px;
+  padding: 2px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.syncBtn:disabled {
+  opacity: 0.6;
 }

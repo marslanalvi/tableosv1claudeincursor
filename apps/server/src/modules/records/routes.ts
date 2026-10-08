@@ -15,6 +15,7 @@ import { withBaseTx, type MutationActor, type BaseMutationContext } from "../../
 import { LimitsService } from "../billing/limits-service.js";
 import { registerRecordHistoryRoutes } from "./history-routes.js";
 import { serializeRecordsByIds } from "./serialize.js";
+import { assertSyncWritable } from "../sync/guard.js";
 import {
   MAX_BATCH,
   TableWriter,
@@ -108,6 +109,7 @@ async function resolve(
   }
   const snapshot = await compileForUser(ctx.db, user.id, baseId);
   assertCan(snapshot, action);
+  await assertSyncWritable(ctx.db, tableId, action, request.body);
   return { baseId, tableId, userId: user.id, table, user };
 }
 

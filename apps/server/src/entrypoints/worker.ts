@@ -18,6 +18,7 @@ import {
 } from "../modules/collab/worker-handlers.js";
 import { connectRedis } from "../lib/redis.js";
 import { startAutomationEngine } from "../modules/automations/consumer.js";
+import { startSyncScheduler } from "../modules/sync/scheduler.js";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -67,7 +68,12 @@ async function main(): Promise<void> {
     },
   );
 
-  log.info("Subscribed to domain events (notifications, search indexer)");
+  const syncScheduler = startSyncScheduler({ db, redis }, log);
+  await eventBus.subscribe(DOMAIN_EVENTS_TOPIC, "table-sync", async (event: DomainEvent) => {
+    await syncScheduler.onEvent(event);
+  });
+
+  log.info("Subscribed to domain events (notifications, search indexer, table sync)");
 
   // Workstream G: automation engine (outbox consumer + scheduler + run executor).
   const automationEngine = startAutomationEngine({ db, env, log });
@@ -110,6 +116,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     automationEngine.stop();
+    syncScheduler.stop();
     await eventBus.close();
     await Promise.all(handles.map((h) => h.worker.close()));
     redis.disconnect();

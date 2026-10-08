@@ -20,6 +20,7 @@ import { useViewConfig, type ViewComponentProps } from "../features/views/view-h
 import { cleanFilter } from "../features/views/view-utils.ts";
 import { useBaseRole } from "../features/grid/field-services.tsx";
 import { AddFieldDialog } from "../features/schema/AddFieldDialog.tsx";
+import { SyncBar } from "../features/base/SyncBar.tsx";
 import { api, type FilterAst, type TableDto, type ViewDto } from "../lib/api.ts";
 import type { ViewConfig } from "../lib/api-areas/views.ts";
 import styles from "../features/grid/grid.module.css";
@@ -181,6 +182,7 @@ export function TableGridPage({
 
   return (
     <div className={viewStyles.page}>
+      {table.sync ? <SyncBar baseId={baseId} table={table} /> : null}
       <ViewToolbar
         key={`toolbar-${viewKey}`}
         baseId={baseId}

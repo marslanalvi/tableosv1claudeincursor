@@ -177,10 +177,16 @@ export function RecordDrawer({ baseId, tableId, recordId, onClose, onNavigate, h
   };
 
   const menuItems: MenuEntry[] = [
-    { key: "dup", icon: "⧉", label: "Duplicate record", disabled: !canEdit, onSelect: () => void duplicate() },
+    { key: "dup", icon: "⧉", label: "Duplicate record", disabled: !canEdit || Boolean(table?.sync), onSelect: () => void duplicate() },
     { key: "link", icon: "🔗", label: "Copy record URL", onSelect: () => void copyLink() },
+    {
+      key: "id",
+      icon: "#",
+      label: "Copy record ID",
+      onSelect: () => void navigator.clipboard?.writeText(recordId).then(() => toastInfo(`Record ID copied: ${recordId}`)),
+    },
     { key: "d", label: "", divider: true },
-    { key: "del", icon: "🗑", label: "Delete record", danger: true, disabled: !canEdit, onSelect: () => setConfirmDelete(true) },
+    { key: "del", icon: "🗑", label: "Delete record", danger: true, disabled: !canEdit || Boolean(table?.sync), onSelect: () => setConfirmDelete(true) },
   ];
 
   const renderField = (f: FieldLike) => (
@@ -194,7 +200,7 @@ export function RecordDrawer({ baseId, tableId, recordId, onClose, onNavigate, h
         field={f}
         value={rec?.fields[f.id]}
         mode="form"
-        readOnly={!canEdit}
+        readOnly={!canEdit || Boolean((f as { isSynced?: boolean }).isSynced)}
         record={rec}
         fields={fields}
         error={rec?.errors?.[f.id]}

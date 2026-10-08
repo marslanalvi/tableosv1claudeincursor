@@ -42,6 +42,7 @@ export const PUBLIC_ID_PREFIXES = [
   "aij",
   "tpl",
   "whk",
+  "dev",
 ] as const;
 
 export type PublicIdPrefix = (typeof PUBLIC_ID_PREFIXES)[number];

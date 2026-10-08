@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import type { TabulaDb } from "@tabula/db";
+import { requestMayAccess } from "../../kernel/request-context.js";
 import { compileForUser } from "./compile.js";
 
 /** Active org membership grants workspace-level access for MVP. */
@@ -20,7 +21,7 @@ export async function userCanAccessWorkspace(
   `.execute(db);
 
   const row = result.rows[0];
-  if (!row) {
+  if (!row || !requestMayAccess(row.org_id)) {
     return { ok: false };
   }
   return { ok: true, orgId: row.org_id };

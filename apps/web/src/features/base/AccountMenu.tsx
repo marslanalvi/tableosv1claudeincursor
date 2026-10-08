@@ -45,6 +45,22 @@ export function AccountMenu() {
           },
         },
         {
+          key: "admin",
+          label: "Members & access",
+          icon: "⚿",
+          onSelect: () => {
+            void router.navigate({ to: "/admin", search: { tab: "people" } });
+          },
+        },
+        {
+          key: "help",
+          label: "Help & documentation",
+          icon: "?",
+          onSelect: () => {
+            void router.navigate({ to: "/help/$topic", params: { topic: "getting-started" } });
+          },
+        },
+        {
           key: "home",
           label: "All workspaces",
           icon: "⌂",

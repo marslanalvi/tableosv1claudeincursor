@@ -159,6 +159,8 @@ export function GridView(props: GridViewProps) {
   );
   const baseRole = useBaseRole(baseId);
   const canEditRecords = props.canEditRecords ?? baseRole.canEditRecords ?? false;
+  // Synced tables mirror another base: their own extra fields stay editable, rows can't be added or removed.
+  const canAddRemove = canEditRecords && !props.table.sync;
   const canEditSchema = props.canEditSchema ?? baseRole.canEditSchema ?? false;
   const qc = useQueryClient();
   const services = useFieldServices(baseId);
@@ -842,12 +844,12 @@ export function GridView(props: GridViewProps) {
       const items: MenuEntry[] = [
         { key: "expand", icon: "⤢", label: "Expand record", onSelect: () => onOpenRecord(recId), disabled: multi },
         { key: "d0", label: "", divider: true },
-        { key: "above", icon: "↑", label: "Insert record above", disabled: !canEditRecords || multi, onSelect: () => void createRecordAt({ before: recId }) },
-        { key: "below", icon: "↓", label: "Insert record below", disabled: !canEditRecords || multi, onSelect: () => void createRecordAt({ after: recId }) },
-        { key: "dup", icon: "⧉", label: multi ? `Duplicate ${ids.length} records` : "Duplicate record", disabled: !canEditRecords, onSelect: () => void duplicateRecords(ids) },
+        { key: "above", icon: "↑", label: "Insert record above", disabled: !canAddRemove || multi, onSelect: () => void createRecordAt({ before: recId }) },
+        { key: "below", icon: "↓", label: "Insert record below", disabled: !canAddRemove || multi, onSelect: () => void createRecordAt({ after: recId }) },
+        { key: "dup", icon: "⧉", label: multi ? `Duplicate ${ids.length} records` : "Duplicate record", disabled: !canAddRemove, onSelect: () => void duplicateRecords(ids) },
         { key: "link", icon: "🔗", label: "Copy record URL", disabled: multi, onSelect: () => void copyText(recordUrl(recId)) },
         { key: "d1", label: "", divider: true },
-        { key: "del", icon: "🗑", label: multi ? `Delete ${ids.length} records` : "Delete record", danger: true, disabled: !canEditRecords, onSelect: () => deleteRecords(ids) },
+        { key: "del", icon: "🗑", label: multi ? `Delete ${ids.length} records` : "Delete record", danger: true, disabled: !canAddRemove, onSelect: () => deleteRecords(ids) },
       ];
       setMenu({ x, y, items });
     },
@@ -1535,7 +1537,7 @@ export function GridView(props: GridViewProps) {
                   type="button"
                   className={styles.addRowBtn}
                   style={{ width: ROWNUM_W + frozenWidth }}
-                  disabled={!canEditRecords}
+                  disabled={!canAddRemove}
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => void createRecordAt()}
                   title="Add record"
@@ -1616,7 +1618,7 @@ export function GridView(props: GridViewProps) {
             <span>
               {selectedRows.size} {selectedRows.size === 1 ? "record" : "records"} selected
             </span>
-            {canEditRecords ? (
+            {canAddRemove ? (
               <>
                 <button type="button" className={styles.bulkBtn} onClick={() => void duplicateRecords([...selectedRows])}>
                   Duplicate

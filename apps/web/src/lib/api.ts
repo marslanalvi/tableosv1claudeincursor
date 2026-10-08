@@ -173,6 +173,23 @@ export interface FieldDto {
   type: string;
   config: FieldConfig;
   slot: number;
+  isReadOnly?: boolean;
+  /** Managed by a table sync; edit it in the source base. */
+  isSynced?: boolean;
+}
+
+export interface TableSyncInfo {
+  id: string;
+  sourceBaseId: string;
+  sourceTableId: string;
+  sourceBaseName: string | null;
+  sourceTableName: string | null;
+  status: "active" | "paused" | "error";
+  intervalMinutes: number;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  recordCount: number | null;
+  syncedFieldIds: string[];
 }
 
 export interface ViewDto {
@@ -203,6 +220,8 @@ export interface TableDto {
   primaryFieldId: string;
   fields: FieldDto[];
   views: ViewDto[];
+  /** Set when this table mirrors a table from another base. */
+  sync?: TableSyncInfo | null;
 }
 
 export interface BaseDetail {

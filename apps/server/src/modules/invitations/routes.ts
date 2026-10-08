@@ -24,11 +24,12 @@ import {
   BASE_ROLE_RANK,
   WORKSPACE_ROLE_RANK,
   getWorkspaceAccess,
-  workspaceRoleCanManageMembers,
+  isOrgOwner,
 } from "../access/workspace-access.js";
 import { sendEmail } from "../automations/mailer.js";
+import { invalidateDeviceCache } from "../access/devices.js";
 
-const WORKSPACE_ROLES = ["owner", "creator", "editor", "commenter", "viewer"] as const;
+const WORKSPACE_ROLES = ["creator", "editor", "commenter", "viewer"] as const;
 const BASE_ROLES = ["creator", "editor", "commenter", "viewer"] as const;
 
 const createInviteBody = z
@@ -116,13 +117,8 @@ export async function registerInvitationRoutes(
           validationProblem(request, reply, `Role "${body.role}" is not a base role`);
           return;
         }
-        const mine = snap.effectiveBaseRole;
-        if (mine !== "creator") {
-          forbidden(request, reply, "Only base creators can invite collaborators");
-          return;
-        }
-        if (BASE_ROLE_RANK[body.role as BaseRole] > BASE_ROLE_RANK[mine]) {
-          forbidden(request, reply, "You cannot grant a role above your own");
+        if (!(await isOrgOwner(ctx.db, user.id, d.org_id))) {
+          forbidden(request, reply, "Only the owner can invite people");
           return;
         }
         orgId = d.org_id;
@@ -135,12 +131,8 @@ export async function registerInvitationRoutes(
           notFound(request, reply, "Workspace not found");
           return;
         }
-        if (!workspaceRoleCanManageMembers(access.workspaceRole)) {
-          forbidden(request, reply, "Only workspace owners and creators can invite members");
-          return;
-        }
-        if (WORKSPACE_ROLE_RANK[body.role as WorkspaceRole] > WORKSPACE_ROLE_RANK[access.workspaceRole]) {
-          forbidden(request, reply, "You cannot grant a role above your own");
+        if (access.orgRole !== "owner") {
+          forbidden(request, reply, "Only the owner can invite people");
           return;
         }
         orgId = access.orgId;
@@ -245,8 +237,11 @@ export async function registerInvitationRoutes(
             notFound(request, reply, "Base not found");
             return;
           }
-          if (snap.effectiveBaseRole !== "creator") {
-            forbidden(request, reply, "Missing permission: base.manage_members");
+          const dir = await sql<{ org_id: string }>`
+            SELECT org_id FROM core.base_directory WHERE base_id = ${baseId} LIMIT 1
+          `.execute(ctx.db);
+          if (!dir.rows[0] || !(await isOrgOwner(ctx.db, user.id, dir.rows[0].org_id))) {
+            forbidden(request, reply, "Only the owner can view invitations");
             return;
           }
           rows = (
@@ -264,8 +259,8 @@ export async function registerInvitationRoutes(
             notFound(request, reply, "Workspace not found");
             return;
           }
-          if (!workspaceRoleCanManageMembers(access.workspaceRole)) {
-            forbidden(request, reply, "Only workspace owners and creators can view invitations");
+          if (access.orgRole !== "owner") {
+            forbidden(request, reply, "Only the owner can view invitations");
             return;
           }
           rows = (
@@ -308,16 +303,7 @@ export async function registerInvitationRoutes(
           notFound(request, reply, "Invitation not found");
           return;
         }
-        let allowed = row.invited_by === user.id;
-        if (!allowed && row.base_id) {
-          const snap = await compileForUser(ctx.db, user.id, row.base_id);
-          allowed = snap.effectiveBaseRole === "creator";
-        }
-        if (!allowed && row.workspace_id) {
-          const access = await getWorkspaceAccess(ctx.db, user.id, row.workspace_id);
-          allowed = workspaceRoleCanManageMembers(access?.workspaceRole ?? null);
-        }
-        if (!allowed) {
+        if (!(await isOrgOwner(ctx.db, user.id, row.org_id))) {
           notFound(request, reply, "Invitation not found");
           return;
         }
@@ -496,6 +482,7 @@ export async function registerInvitationRoutes(
         `.execute(trx);
       });
       invalidateUserSnapshotCache(user.id);
+      invalidateDeviceCache(user.id);
 
       await writeAuditEvent(ctx.db, {
         orgId: row.org_id,

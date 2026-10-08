@@ -513,3 +513,8 @@ All `data.*` tables carry `workspace_id`, and it is in the primary key or a repl
 | T3 | View creation is reachable from the toolbar switcher, a sidebar `+` and an inline Create list | [10 §20](10-view-engine.md) |
 | T4 | Interfaces ship as an MVP (draft → publish snapshots, element-scoped server queries) for base members only | [13 §18](13-interface-builder.md) lists the deviations |
 | T5 | SQL-generated public ids must use `public.uuidv7()`; `gen_random_uuid()` breaks `encodePublicId` | migrations `0064`/`0065` |
+| T6 | Only the organization **owner** invites people, sets workspace/base roles and access end dates, suspends/removes members, approves devices and issues API tokens | `modules/members/routes.ts`; grant changes bump `perm_epoch` |
+| T7 | Device restriction is **device approval**, not MAC addresses (browsers can't read them): a random httpOnly device-key cookie, owner approves per org, enforced on every request; on by default, owner exempt | `core.org_devices`, migration `0068` |
+| T8 | **API tokens** (`tos_…`, hash stored) with `read`/`write`/`delete` scopes and an optional base list, limited to the record API and schema reads; `/v1/tables/:tableId/…` accepts a table id alone | `core.api_tokens`, `access/api-tokens.ts`, `public-api/routes.ts` |
+| T9 | Cross-base data uses **synced tables** (read-only local copies kept fresh by the worker); a cross-base link is a local link to a synced copy, so the link engine stays single-base | `data.table_syncs`, migration `0069`, `modules/sync/` |
+| T10 | New views hide Record ID fields by default | `bootstrap-default-table.ts`, view creation defaults |

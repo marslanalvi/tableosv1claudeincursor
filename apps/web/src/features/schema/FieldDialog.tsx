@@ -15,6 +15,8 @@ import type { FieldWire } from "../../lib/api-areas/fields.ts";
 import { useBaseDetail, useFieldServices } from "../grid/field-services.tsx";
 import { Toaster } from "../grid/toast.tsx";
 import { useFieldActions } from "./field-actions.ts";
+import { syncApi } from "../../lib/api-areas/sync.ts";
+import { SyncSourcePicker } from "../base/SyncSourcePicker.tsx";
 import styles from "./field-dialog.module.css";
 
 const GROUPS: Array<{ key: string; label: string }> = [
@@ -31,6 +33,58 @@ function sampleRecordFromCache(qc: ReturnType<typeof useQueryClient>, baseId: st
     if (first && typeof first === "object") return first as { id: string; fields: Record<string, unknown> };
   }
   return undefined;
+}
+
+/** Link to a table in another base: creates (or reuses) a synced copy here and links to it. */
+function CrossBaseLinkPicker({ baseId, onLinked }: { baseId: string; onLinked: (tableId: string) => void }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [value, setValue] = useState("");
+  const [linked, setLinked] = useState<string | null>(null);
+  if (!open) {
+    return (
+      <button type="button" className={styles.linkBtn} onClick={() => setOpen(true)}>
+        + Link to a table in another base
+      </button>
+    );
+  }
+  return (
+    <div className={styles.desc}>
+      <div style={{ marginBottom: 6 }}>
+        Pick a table from another base. TableOS adds a synced, read-only copy of it to this base (kept up to date automatically) and links to it, so lookups and rollups work as usual.
+      </div>
+      <SyncSourcePicker
+        baseId={baseId}
+        value={value}
+        onChange={(id, name) => {
+          setValue(id);
+          setLinked(null);
+          if (!id) return;
+          setBusy(true);
+          setErr(null);
+          void syncApi
+            .create(baseId, { sourceTableId: id })
+            .then(async (res) => {
+              await qc.invalidateQueries({ queryKey: ["bases", baseId] });
+              onLinked(res.tableId);
+              setLinked(name);
+              if (res.error) setErr(`Synced table created, but the first sync failed: ${res.error}`);
+            })
+            .catch((e: unknown) => setErr(e instanceof Error ? e.message : "Could not sync that table"))
+            .finally(() => setBusy(false));
+        }}
+      />
+      {busy ? <div style={{ marginTop: 6 }}>Syncing…</div> : null}
+      {linked && !busy ? (
+        <div style={{ marginTop: 6 }}>
+          ✓ Synced “{linked}” into this base (tab marked ⇄). This field will link to it.
+        </div>
+      ) : null}
+      {err ? <div className={styles.error}>{err}</div> : null}
+    </div>
+  );
 }
 
 /**
@@ -254,6 +308,12 @@ export function FieldDialog({
                   fieldId={field?.id}
                   sampleRecord={sample}
                 />
+                {type === "link" && !editing ? (
+                  <CrossBaseLinkPicker
+                    baseId={baseId}
+                    onLinked={(linkedTableId) => setConfig((c) => ({ ...c, linkedTableId }))}
+                  />
+                ) : null}
                 {showDesc ? (
                   <textarea
                     className={`${styles.input} ${styles.textarea}`}

@@ -36,6 +36,8 @@ export async function bootstrapDefaultTable(
     emptyRecords?: number;
     /** Order key for the table (defaults to after the last table). */
     orderKey?: string;
+    /** Replaces the starter fields; the first one becomes the primary field. */
+    fields?: Array<{ name: string; type: string; config: Record<string, unknown> }>;
   },
 ): Promise<BootstrappedTable> {
   const tableId = generateUuidV7();
@@ -55,7 +57,7 @@ export async function bootstrapDefaultTable(
     }
   }
 
-  const fields: Array<{ name: string; type: string; config: Record<string, unknown> }> = [
+  const fields: Array<{ name: string; type: string; config: Record<string, unknown> }> = params.fields ?? [
     { name: "Name", type: "text", config: {} },
     { name: "Notes", type: "long_text", config: { richText: false } },
     { name: "Assignee", type: "collaborator", config: { allowMultiple: false, notify: true } },
@@ -97,6 +99,9 @@ export async function bootstrapDefaultTable(
     WHERE id = ${tableId}
   `.execute(trx);
 
+  const recordIdFieldIds = fields
+    .flatMap((f, i) => (f.type === "record_id" ? [encodePublicId({ prefix: "fld", uuid: fieldIds[i]! })] : []));
+
   const lastView = await sql<{ order_key: string }>`
     SELECT order_key FROM data.views WHERE base_id = ${params.baseId} ORDER BY order_key DESC LIMIT 1
   `.execute(trx);
@@ -111,7 +116,8 @@ export async function bootstrapDefaultTable(
       id, workspace_id, base_id, table_id, type, name, order_key, is_default, created_by, config
     ) VALUES (
       ${viewId}, ${params.workspaceId}, ${params.baseId}, ${tableId}, 'grid', 'Grid view',
-      ${viewKey}, true, ${params.userId}, '{}'::jsonb
+      ${viewKey}, true, ${params.userId},
+      ${JSON.stringify({ hiddenFieldIds: recordIdFieldIds })}::jsonb
     )
   `.execute(trx);
 

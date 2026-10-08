@@ -1,4 +1,7 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { syncApi } from "../../lib/api-areas/sync.ts";
+import { SyncSourcePicker } from "./SyncSourcePicker.tsx";
+import { copyText } from "../../lib/ids.ts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BaseDetail, TableDto } from "../../lib/api.ts";
 import { api } from "../../lib/api.ts";
@@ -121,7 +124,7 @@ function InlineRename({
   );
 }
 
-type AddMode = "blank" | "import";
+type AddMode = "blank" | "import" | "sync";
 
 function AddTableDialog({
   baseId,
@@ -139,13 +142,23 @@ function AddTableDialog({
   const qc = useQueryClient();
   const [name, setName] = useState(defaultName);
   const [mode, setMode] = useState<AddMode>(initialMode);
+  const [sourceId, setSourceId] = useState("");
   const create = useMutation({
-    mutationFn: () => api.createTable(baseId, name.trim()),
-    onSuccess: async (res) => {
+    mutationFn: async () => {
+      if (mode === "sync") {
+        const res = await syncApi.create(baseId, { sourceTableId: sourceId, ...(name.trim() ? { name: name.trim() } : {}) });
+        if (res.error) toast.error(new Error(res.error), "The table was created, but the first sync failed");
+        return res.tableId;
+      }
+      return (await api.createTable(baseId, name.trim())).table.id;
+    },
+    onSuccess: async (tableId) => {
       await qc.invalidateQueries({ queryKey: ["bases", baseId] });
-      onCreated(res.table.id, mode === "import");
+      onCreated(tableId, mode === "import");
+      if (mode === "sync") toast.success("Synced table created. It stays up to date with the source.");
     },
   });
+  const ready = mode === "sync" ? Boolean(sourceId) : Boolean(name.trim());
   return (
     <Dialog
       title="Add a table"
@@ -158,10 +171,10 @@ function AddTableDialog({
           <button
             type="button"
             className={uiStyles.btnPrimary}
-            disabled={!name.trim() || create.isPending}
+            disabled={!ready || create.isPending}
             onClick={() => create.mutate()}
           >
-            {create.isPending ? "Creating…" : mode === "import" ? "Create and import" : "Create table"}
+            {create.isPending ? (mode === "sync" ? "Syncing…" : "Creating…") : mode === "import" ? "Create and import" : mode === "sync" ? "Create synced table" : "Create table"}
           </button>
         </>
       }
@@ -169,7 +182,7 @@ function AddTableDialog({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (name.trim()) create.mutate();
+          if (ready) create.mutate();
         }}
       >
         <div className={uiStyles.field}>
@@ -205,7 +218,29 @@ function AddTableDialog({
             <strong>Import CSV</strong>
             <span>Create the table, then upload a CSV file.</span>
           </button>
+          <button
+            type="button"
+            className={styles.startOption}
+            data-active={mode === "sync"}
+            onClick={() => setMode("sync")}
+          >
+            <strong>Sync from another base</strong>
+            <span>A read-only copy of a table in another base, kept up to date. Link to it and use lookups here.</span>
+          </button>
         </div>
+        {mode === "sync" ? (
+          <div className={uiStyles.field}>
+            <label className={uiStyles.label}>Table to sync</label>
+            <SyncSourcePicker
+              baseId={baseId}
+              value={sourceId}
+              onChange={(id, tableName) => {
+                setSourceId(id);
+                if (tableName && (name === defaultName || !name.trim())) setName(tableName);
+              }}
+            />
+          </div>
+        ) : null}
         {create.isError ? <p className={uiStyles.error}>{errorMessage(create.error)}</p> : null}
       </form>
     </Dialog>
@@ -553,6 +588,12 @@ function TablesMenu({
               </span>
               <span>Import CSV file</span>
             </button>
+            <button type="button" role="menuitem" className={uiStyles.menuItem} onClick={() => onAdd("sync")}>
+              <span className={uiStyles.menuIcon} aria-hidden>
+                ⇄
+              </span>
+              <span>Sync from another base</span>
+            </button>
           </div>
         </FloatingPanel>
       ) : null}
@@ -646,6 +687,34 @@ export function TableTabs({
       toast.success("Table deleted — restore it from Trash or press Ctrl+Z");
     },
     onError: (err) => toast.error(err, "Could not delete table"),
+  });
+  const [idsFor, setIdsFor] = useState<TableDto | null>(null);
+  const [stopSyncFor, setStopSyncFor] = useState<TableDto | null>(null);
+  const syncNow = useMutation({
+    mutationFn: (tableId: string) => syncApi.runNow(baseId, tableId),
+    onSuccess: async (res) => {
+      await refresh();
+      if (res.sync.lastError) toast.error(new Error(res.sync.lastError), "Sync failed");
+      else toast.success("Synced");
+    },
+    onError: (err) => toast.error(err, "Could not sync"),
+  });
+  const syncPause = useMutation({
+    mutationFn: (v: { tableId: string; status: "active" | "paused" }) => syncApi.update(baseId, v.tableId, { status: v.status }),
+    onSuccess: async (res) => {
+      await refresh();
+      toast.success(res.sync.status === "paused" ? "Syncing paused" : "Syncing resumed");
+    },
+    onError: (err) => toast.error(err, "Could not change sync"),
+  });
+  const stopSync = useMutation({
+    mutationFn: (tableId: string) => syncApi.stop(baseId, tableId),
+    onSuccess: async () => {
+      await refresh();
+      setStopSyncFor(null);
+      toast.success("Syncing stopped. The table is now a normal table.");
+    },
+    onError: (err) => toast.error(err, "Could not stop syncing"),
   });
   const reorder = useMutation({
     mutationFn: (ids: string[]) => shellApi.reorderTables(baseId, ids),
@@ -814,6 +883,11 @@ export function TableTabs({
                   onDoubleClick={() => setRenaming(table.id)}
                 >
                   <TabText name={table.name} />
+                  {table.sync ? (
+                    <span className={styles.syncBadge} title={`Synced from ${table.sync.sourceBaseName ?? "another base"}`} aria-label="Synced table">
+                      ⇄
+                    </span>
+                  ) : null}
                 </button>
               )}
               {renaming !== table.id ? (
@@ -872,6 +946,7 @@ export function TableTabs({
           <div key={t.id} className={styles.tableTab} data-measure-id={t.id}>
             <span className={styles.tableTabLabel}>
               <TabText name={t.name} />
+              {t.sync ? <span className={styles.syncBadge}>⇄</span> : null}
             </span>
             <span className={styles.tabCaret} />
           </div>
@@ -943,11 +1018,32 @@ export function TableTabs({
               label: "Copy table ID",
               icon: "#",
               onSelect: () =>
-                void navigator.clipboard
-                  ?.writeText(menuTable.id)
-                  .then(() => toast.success("Table ID copied"))
-                  .catch(() => toast.info(menuTable.id)),
+                void copyText(menuTable.id).then((ok) => (ok ? toast.success(`Table ID copied: ${menuTable.id}`) : toast.info(menuTable.id))),
             },
+            { key: "ids", label: "IDs & API…", icon: "{}", onSelect: () => setIdsFor(menuTable) },
+            ...(menuTable.sync
+              ? [
+                  {
+                    key: "sync-now",
+                    label: "Sync now",
+                    icon: "⇄",
+                    separatorBefore: true,
+                    onSelect: () => syncNow.mutate(menuTable.id),
+                  },
+                  {
+                    key: "sync-pause",
+                    label: menuTable.sync.status === "paused" ? "Resume syncing" : "Pause syncing",
+                    icon: menuTable.sync.status === "paused" ? "▶" : "⏸",
+                    onSelect: () => syncPause.mutate({ tableId: menuTable.id, status: menuTable.sync!.status === "paused" ? "active" : "paused" }),
+                  },
+                  {
+                    key: "sync-stop",
+                    label: "Stop syncing (make editable)",
+                    icon: "✂",
+                    onSelect: () => setStopSyncFor(menuTable),
+                  },
+                ]
+              : []),
             {
               key: "delete",
               label: "Delete table",
@@ -989,6 +1085,77 @@ export function TableTabs({
           onClose={() => setDeleting(null)}
         />
       ) : null}
+      {stopSyncFor ? (
+        <ConfirmDialog
+          title="Stop syncing?"
+          message={
+            <>
+              <strong>{stopSyncFor.name}</strong> keeps its current records but won’t receive changes from{" "}
+              {stopSyncFor.sync?.sourceBaseName ?? "the source base"} any more. All of its fields become editable.
+            </>
+          }
+          confirmLabel="Stop syncing"
+          busy={stopSync.isPending}
+          onConfirm={() => stopSync.mutate(stopSyncFor.id)}
+          onClose={() => setStopSyncFor(null)}
+        />
+      ) : null}
+      {idsFor ? <IdsDialog baseId={baseId} table={idsFor} onClose={() => setIdsFor(null)} /> : null}
     </div>
+  );
+}
+
+function CopyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className={styles.idRow}>
+      <span className={styles.idLabel}>{label}</span>
+      <code className={styles.idValue}>{value}</code>
+      <button
+        type="button"
+        className={uiStyles.btn}
+        onClick={() => void copyText(value).then((ok) => (ok ? toast.success(`${label} copied`) : toast.info(value)))}
+      >
+        Copy
+      </button>
+    </div>
+  );
+}
+
+/** Base, table and field ids for the API, with a ready-to-run example. */
+function IdsDialog({ baseId, table, onClose }: { baseId: string; table: TableDto; onClose: () => void }) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const example = `curl -X POST "${origin}/v1/tables/${table.id}/records/query" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '{"pageSize": 50}'`;
+  return (
+    <Dialog
+      title={`IDs & API — ${table.name}`}
+      onClose={onClose}
+      footer={
+        <button type="button" className={uiStyles.btnPrimary} onClick={onClose}>
+          Done
+        </button>
+      }
+    >
+      <p className={uiStyles.muted}>
+        Every base, table, field and record has a permanent ID that is unique across all of TableOS. Renaming never changes it. Use these IDs with the API; owners create tokens in Members &amp; access → API tokens.
+      </p>
+      <CopyRow label="Base ID" value={baseId} />
+      <CopyRow label="Table ID" value={table.id} />
+      {table.sync ? (
+        <p className={uiStyles.muted}>
+          Synced from {table.sync.sourceBaseName} › {table.sync.sourceTableName} (source table ID {table.sync.sourceTableId}).
+        </p>
+      ) : null}
+      <div className={uiStyles.label}>Field IDs</div>
+      <div className={styles.idList}>
+        {table.fields.map((f) => (
+          <CopyRow key={f.id} label={f.name} value={f.id} />
+        ))}
+      </div>
+      <div className={uiStyles.label}>Example: list records by table ID</div>
+      <pre className={styles.idCode}>{example}</pre>
+      <a className={styles.idLink} href="/help/api" target="_blank" rel="noreferrer">
+        Full API reference →
+      </a>
+    </Dialog>
   );
 }

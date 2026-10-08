@@ -17,6 +17,8 @@ import { bootstrapDefaultTable } from "./bootstrap-default-table.js";
 import { loadTableConfigInfo, serializeView, viewEditRights } from "../views/serialize.js";
 import { compileForUser } from "../access/compile.js";
 import { fieldRowToDto } from "../schema/field-dto.js";
+import { syncedFieldsByTable } from "../sync/engine.js";
+import { sourceNames, syncDto } from "../sync/routes.js";
 
 const nameBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -237,6 +239,9 @@ export async function registerBaseRoutes(
           viewsByTable.set(view.table_id, list);
         }
         const hiddenTableIds = await loadHiddenTableIds(ctx.db, user.id, baseId);
+        const syncs = await syncedFieldsByTable(ctx.db, baseId);
+        const syncInfo = new Map<string, ReturnType<typeof syncDto>>();
+        for (const [tableId, s] of syncs) syncInfo.set(tableId, syncDto(s.sync, await sourceNames(ctx.db, s.sync)));
 
         void reply.send({
           id: pid("bas", baseId),
@@ -249,8 +254,8 @@ export async function registerBaseRoutes(
               ? pid("fld", table.primary_field_id)
               : "",
             // FieldDto (CONTRACTS ?4) via workstream B's serializer.
-            fields: (fieldsByTable.get(table.id) ?? []).map((f) =>
-              fieldRowToDto(
+            fields: (fieldsByTable.get(table.id) ?? []).map((f) => {
+              const dto = fieldRowToDto(
                 {
                   id: f.id,
                   name: f.name,
@@ -262,8 +267,10 @@ export async function registerBaseRoutes(
                   tableId: f.table_id,
                 },
                 { primaryFieldId: table.primary_field_id, nameById: fieldNameById },
-              ),
-            ),
+              );
+              return syncs.get(table.id)?.fieldIds.has(f.id) ? { ...dto, isReadOnly: true, isSynced: true } : dto;
+            }),
+            sync: syncInfo.get(table.id) ?? null,
             views: (viewsByTable.get(table.id) ?? []).map((v) =>
               serializeView(v, user.id, viewConfigInfo.get(table.id), viewRights),
             ),

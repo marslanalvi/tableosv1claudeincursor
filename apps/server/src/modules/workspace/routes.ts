@@ -8,6 +8,7 @@ import { ApiError, handleRouteError, notFound, validationProblem } from "../../h
 import { userCanAccessWorkspace } from "../access/helpers.js";
 import { compileForUser } from "../access/compile.js";
 import { getWorkspaceAccess } from "../access/workspace-access.js";
+import { requestMayAccess } from "../../kernel/request-context.js";
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -54,7 +55,7 @@ export async function registerWorkspaceRoutes(
       `.execute(ctx.db);
 
       void reply.send({
-        workspaces: result.rows.map((r) => ({
+        workspaces: result.rows.filter((r) => requestMayAccess(r.org_id)).map((r) => ({
           id: pid("wsp", r.id),
           name: r.name,
           organizationId: pid("org", r.org_id),

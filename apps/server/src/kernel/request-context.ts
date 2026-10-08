@@ -9,6 +9,34 @@ import type { FastifyInstance } from "fastify";
  */
 export interface KernelRequestContext {
   clientMutationId?: string;
+  /** Filled by the auth hook; read by the permission compilers. */
+  access?: RequestAccess;
+}
+
+export interface RequestAccess {
+  /** Orgs whose data this request may not reach (this device isn't approved there). */
+  blockedOrgs: Set<string>;
+  /** Present when the request authenticated with an API token. */
+  token?: {
+    id: string;
+    orgId: string;
+    scopes: Set<"read" | "write" | "delete">;
+    /** Null = every base in the token's org. */
+    baseIds: Set<string> | null;
+  };
+}
+
+/** Whether the current request may reach data in `orgId` (and `baseId`, for tokens). */
+export function requestMayAccess(orgId: string, baseId?: string): boolean {
+  const access = storage.getStore()?.access;
+  if (!access) return true;
+  if (access.blockedOrgs.has(orgId)) return false;
+  const t = access.token;
+  if (t) {
+    if (t.orgId !== orgId) return false;
+    if (baseId && t.baseIds && !t.baseIds.has(baseId)) return false;
+  }
+  return true;
 }
 
 const storage = new AsyncLocalStorage<KernelRequestContext>();

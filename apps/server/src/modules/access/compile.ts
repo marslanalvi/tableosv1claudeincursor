@@ -5,6 +5,7 @@ import {
 } from "@tabula/permissions";
 import type { TabulaDb } from "@tabula/db";
 import { sql } from "kysely";
+import { requestMayAccess } from "../../kernel/request-context.js";
 import { orgRoleGrantsWorkspaceOwner } from "./workspace-access.js";
 
 /**
@@ -112,6 +113,9 @@ export async function compileForUser(
   }
   const workspaceId = row.workspace_id;
   const permEpoch = Number(row.perm_epoch ?? 1);
+  if (!requestMayAccess(row.org_id, baseId)) {
+    return { baseId, workspaceId, effectiveBaseRole: null, permEpoch };
+  }
 
   if (
     cached &&
@@ -164,6 +168,9 @@ export async function compileForWorkspace(
     SELECT org_id FROM core.workspaces WHERE id = ${workspaceId} LIMIT 1
   `.execute(db);
   const orgId = org.rows[0]?.org_id;
+  if (orgId && !requestMayAccess(orgId)) {
+    return compileSnapshot([], { baseId: "", workspaceId }, 1);
+  }
   if (orgId) {
     const orgGrant = await orgOwnerGrant(db, userId, orgId, workspaceId);
     if (orgGrant) rows.push(orgGrant);

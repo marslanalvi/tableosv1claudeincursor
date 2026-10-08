@@ -22,6 +22,9 @@ import { registerBillingRoutes } from "../modules/billing/routes.js";
 import { registerFeatureFlagRoutes } from "../modules/feature-flags/routes.js";
 import { registerAutomationsRoutes } from "../modules/automations/routes.js";
 import { registerInterfaceRoutes } from "../modules/interfaces/routes.js";
+import { registerMembersRoutes } from "../modules/members/routes.js";
+import { registerPublicApiRoutes } from "../modules/public-api/routes.js";
+import { registerSyncRoutes } from "../modules/sync/routes.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { TabulaErrorCodes, createTabulaError } from "@tabula/types";
 import { internalErrorProblem, problemFromError } from "./errors.js";
@@ -159,6 +162,9 @@ export async function buildFastify(ctx: AppContext) {
   await registerFeatureFlagRoutes(app, ctx);
   await registerAutomationsRoutes(app, ctx);
   await registerInterfaceRoutes(app, ctx);
+  await registerMembersRoutes(app, ctx);
+  await registerPublicApiRoutes(app, ctx);
+  await registerSyncRoutes(app, ctx);
 
   app.setNotFoundHandler((request, reply) => {
     sendProblem(

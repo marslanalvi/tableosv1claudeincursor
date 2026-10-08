@@ -165,7 +165,7 @@ export async function withBaseTx(
         ${params.actor.actorType},
         ${params.actor.actorId},
         ${params.actor.via},
-        ${params.actor.sessionId ?? null},
+        ${params.actor.sessionId || null},
         ${clientMutationId},
         ${schemaVersion}
       )

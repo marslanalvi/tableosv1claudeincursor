@@ -18,12 +18,68 @@ TableOS is an Airtable-style product: workspaces → bases → tables → fields
 | Migrate | `$env:DATABASE_URL="postgres://tabula:tabula@localhost:5432/tabula_cc"; npx pnpm@9.15.0 db:migrate` |
 | Typecheck | `npx tsc -p apps/server/tsconfig.json --noEmit` and `npx tsc -p apps/web/tsconfig.app.json --noEmit` |
 | Unit tests | `npx pnpm@9.15.0 --filter "@tabula/filter" --filter "@tabula/formula" test` (and other packages' `test`) |
-| API checks | `node .data/verify-interfaces.mjs`, `node .data/verify-round.mjs` |
+| API checks | `node .data/verify-interfaces.mjs`, `node .data/verify-round.mjs`, `node .data/verify-access.mjs`, `node .data/verify-sync.mjs` |
 | UI checks | `$env:PW_VIEWPORT="1366x768"; node .data/r2-shell/pw.mjs .data/r2-shell/look-interfaces.mjs` (screenshots in `.data/r2-shell/shots/`) |
 
 ---
 
-## Round 4 (this round): Record ID field, "Fields" panel, view creation, Forms studio, Interfaces
+## Round 5 (this round): owner-controlled privileges, device approval, API tokens, cross-base data, table ids, Help centre
+
+### 1. Privileges: only the owner manages access
+
+* **Owner-only management.** Inviting, changing roles, ending access, suspending/removing members, approving devices and creating API tokens all require the organization owner (`isOrgOwner`). Other members get `403`. The owner's own membership can't be changed (`409`).
+* **Members & access page** (`/admin`, account menu → "Members & access"; `features/admin/AdminPage.tsx`) with four tabs:
+  * **People:** invite to a whole workspace or a single base with a role; pending invitations; per-member access table (role per workspace and per base, plus an optional "Access until" date); Suspend / Reactivate / Remove.
+  * **Devices**, **API tokens**, **Security** (below).
+* **Server:** `apps/server/src/modules/members/routes.ts` (`GET /v1/orgs`, `GET /v1/orgs/:orgId/access`, `PUT …/members/:userId/grants`, `PATCH`/`DELETE …/members/:userId`, device and token routes). Grant changes bump `perm_epoch` and drop the permission snapshot caches, so they apply to signed-in users at once. Grant expiry (`expiresAt`) is enforced when permissions are compiled.
+* The workspace Share dialog no longer offers "Owner" as an invite role and points to Members & access.
+
+### 2. Device approval (replaces MAC-address restriction)
+
+Browsers can't read a MAC address, so each browser gets a random device key in a long-lived httpOnly cookie (`tableos_device`); only its SHA-256 is stored (`core.org_devices`, migration `0068_access_control.sql`).
+
+* In an org that requires approval (the default; toggle in **Security**), a non-owner's new device starts `pending`. That org's data is unreachable from it until the owner approves it. The owner is always exempt.
+* The member sees a banner (`DeviceBanner.tsx`, polling `GET /v1/devices/current`) that unlocks automatically once approved.
+* The owner can approve, deny, revoke, rename or forget devices. Checks run centrally on every request (`access/devices.ts`, request context `access.blockedOrgs`), with a 15 s cache that is invalidated when an invitation is accepted or a device decision is made.
+
+### 3. API tokens with read / write / delete types
+
+* Owner-only, in **Members & access → API tokens**: name, any combination of **read**, **write**, **delete**, all bases or chosen bases, optional expiry. The raw token (`tos_…`) is shown once; only its hash is stored (`core.api_tokens`).
+* `Authorization: Bearer tos_…` is accepted by the auth hook. `access/api-tokens.ts → requiredScope` limits tokens to the record API and schema reads and maps each method/path to the needed scope; tokens act with the owner's permissions, narrowed by scope and base list.
+* **Table-id-only API:** `/v1/tables/:tableId/…` resolves the base and forwards to `/v1/bases/:baseId/tables/:tableId/…` (`public-api/routes.ts`); `GET /v1/api/bases` lists reachable bases and tables.
+* `kernel/mutation.ts`: token writes have no session, so `session_id` is stored as `NULL` (it was `""`, which failed the uuid column).
+
+### 4. Data from other bases: synced tables and cross-base links
+
+* **Synced tables** (`modules/sync/`, migration `0069_table_syncs.sql`): a read-only copy of another base's table in the same org.
+  * The engine (`engine.ts`) maps field types (computed fields become their result type, attachments become text, buttons are skipped), reconciles schema (create, rename, retype, delete) and copies records by content hash in batches of 500.
+  * The worker (`scheduler.ts`) re-syncs about 2 s after the source table changes, plus a sweep every minute for syncs that are due (default every 5 minutes).
+  * Syncs run with the creator's read access to the source; losing access puts the sync in `error`.
+  * Synced fields and records are read-only (`guard.ts`, `403`), but you can add your own fields to a synced table. "Stop syncing" turns it into a normal table.
+  * UI: "Sync from another base" in the add-table menu and dialog, ⇄ tab badge, a sync bar (last sync, Sync now, Pause/Resume) and tab-menu actions.
+* **Cross-base links:** a link field can target "a table in another base" (`FieldDialog.tsx → CrossBaseLinkPicker`). It creates or reuses a synced copy and links to it, so lookups and rollups work unchanged.
+
+### 5. Table ids
+
+Table ids were already globally unique UUIDv7 public ids (`tbl_…`), unique across all bases. They are now visible: the table tab menu → **IDs & API…** shows the base, table and field ids with copy buttons and a `curl` example. The expanded record has **Copy record ID**.
+
+### 6. Record ID hidden by default in new views
+
+New views (and a new table's first view) hide Record ID fields; they can be shown from **Fields** (`bootstrap-default-table.ts`, view creation defaults).
+
+### 7. Help centre
+
+`/help/:topic` (account menu → "Help & documentation"; readable signed out) with search and 20 topics: getting started, IDs, fields (list generated from `FIELD_TYPES`), editing records, views, links/lookups/rollups, synced tables, formulas, import/export, forms, interfaces, automations, sharing, search/notifications/contacts, roles and privileges, device approval, account/2FA, API tokens, API reference with examples and errors, and keyboard shortcuts (`features/help/`).
+
+### Verified
+
+* Typecheck: server and web clean.
+* `node .data/verify-access.mjs`: 39 checks covering owner-only management, grant expiry, suspend/remove, device approval, and token scopes, base limits and revocation.
+* `node .data/verify-sync.mjs`: initial sync, live updates via the worker, renamed/deleted fields and records, read-only guard, links and lookups to a synced table, pause, stop syncing, and refusal for a source you can't read.
+* `verify-round.mjs` and `verify-interfaces.mjs` still pass.
+* Playwright: `.data/r2-shell/r5-look.mjs` (Help pages, search, account menu, every Members & access tab) and `r5-crossbase.mjs` (link to a table in another base from the field dialog).
+
+## Round 4: Record ID field, "Fields" panel, view creation, Forms studio, Interfaces (commit `e7153c7`)
 
 ### 1. Record ID is a real, visible, hideable field on every table
 

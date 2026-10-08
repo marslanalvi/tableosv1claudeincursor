@@ -18,6 +18,9 @@ import { BasePage } from "../routes/base.tsx";
 import { ContactsPage } from "../routes/contacts.tsx";
 import { AccountPage } from "../features/account/AccountPage.tsx";
 import { AcceptInvite } from "../features/account/AcceptInvite.tsx";
+import { AdminPage, type AdminTab } from "../features/admin/AdminPage.tsx";
+import { DeviceBanner } from "../features/admin/DeviceBanner.tsx";
+import { HelpPage } from "../features/help/HelpPage.tsx";
 
 function currentPath(): string {
   if (typeof window === "undefined") return "/";
@@ -73,6 +76,7 @@ async function redirectIfAuthed({ search }: { search: { next?: string } }) {
 const rootRoute = createRootRoute({
   component: () => (
     <>
+      <DeviceBanner />
       <Outlet />
       <SearchPaletteHost />
       <ToastHost />
@@ -161,6 +165,62 @@ const accountRoute = createRoute({
   },
 });
 
+const ADMIN_TABS: AdminTab[] = ["people", "devices", "tokens", "settings"];
+
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  validateSearch: (search: Record<string, unknown>): { tab: AdminTab } => ({
+    tab: ADMIN_TABS.includes(search.tab as AdminTab) ? (search.tab as AdminTab) : "people",
+  }),
+  beforeLoad: async () => {
+    const me = await ensureAuth();
+    return { me };
+  },
+  component: function AdminRouteComponent() {
+    const { tab } = adminRoute.useSearch();
+    const navigate = adminRoute.useNavigate();
+    return (
+      <AdminPage
+        tab={tab}
+        onTab={(t) => void navigate({ search: { tab: t }, replace: true })}
+        onBack={() => {
+          if (window.history.length > 1) window.history.back();
+          else void navigate({ to: "/" });
+        }}
+      />
+    );
+  },
+});
+
+const helpIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/help",
+  beforeLoad: () => {
+    throw redirect({ to: "/help/$topic", params: { topic: "getting-started" } });
+  },
+});
+
+/** Help is readable without signing in. */
+const helpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/help/$topic",
+  component: function HelpRouteComponent() {
+    const { topic } = helpRoute.useParams();
+    const navigate = helpRoute.useNavigate();
+    return (
+      <HelpPage
+        topic={topic}
+        onTopic={(t) => void navigate({ to: "/help/$topic", params: { topic: t } })}
+        onBack={() => {
+          if (window.history.length > 1) window.history.back();
+          else void navigate({ to: "/" });
+        }}
+      />
+    );
+  },
+});
+
 /** Public: signed-out visitors see the invitation and are sent to log in. */
 const inviteRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -202,6 +262,9 @@ const routeTree = rootRoute.addChildren([
   baseRoute,
   contactsRoute,
   accountRoute,
+  adminRoute,
+  helpIndexRoute,
+  helpRoute,
   inviteRoute,
   legacyInviteRoute,
 ]);

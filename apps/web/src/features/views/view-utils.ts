@@ -175,7 +175,7 @@ export const NON_EDITABLE_TYPES = new Set([
 ]);
 
 export function isEditableField(f: FieldDto): boolean {
-  return !NON_EDITABLE_TYPES.has(f.type) && !(f as { isComputed?: boolean }).isComputed;
+  return !NON_EDITABLE_TYPES.has(f.type) && !(f as { isComputed?: boolean }).isComputed && !f.isSynced;
 }
 
 /** Table fields in view order (primary first, then fieldOrder, then the rest). */

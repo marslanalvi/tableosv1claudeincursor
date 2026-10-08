@@ -267,7 +267,12 @@ export function defaultConfigForType(
   fields: ConfigFieldInfo[],
   tableName?: string,
 ): ViewConfig {
-  return { ...baseDefaults(), ...typeDefaults(type, fields, tableName) };
+  return {
+    ...baseDefaults(),
+    // Record ID is always present but starts hidden; users reveal it from the Fields menu.
+    hiddenFieldIds: fields.filter((f) => f.type === "record_id").map((f) => f.id),
+    ...typeDefaults(type, fields, tableName),
+  };
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {

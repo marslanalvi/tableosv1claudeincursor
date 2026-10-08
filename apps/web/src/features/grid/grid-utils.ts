@@ -96,7 +96,7 @@ export function computeSummary(
 }
 
 export function isEditableField(field: FieldLike, canEdit: boolean): boolean {
-  return canEdit && !field.isComputed && !isReadOnlyFieldType(field.type);
+  return canEdit && !field.isComputed && !isReadOnlyFieldType(field.type) && !(field as { isSynced?: boolean }).isSynced;
 }
 
 // ---------------------------------------------------------------------------
